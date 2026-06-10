@@ -1,14 +1,26 @@
 // app/routes/index.tsx
 import { createRoute } from 'honox/factory'
-import { cache } from 'hono/cache'
 import NavbarFrontend from '../components/NavbarFrontend'
 
 export default createRoute(
-  cache({
-    cacheName: 'smm-frontend-cache',
-    cacheControl: 'max-age=300, stale-while-revalidate=600',
-  }),
   async (c) => {
+    // 1. Ambil jumlah layanan aktif & kategori secara paralel dari Database D1
+    let totalServices = 0
+    let totalCategories = 0
+
+    try {
+      const [servicesCount, categoriesCount] = await Promise.all([
+        c.env.DB.prepare("SELECT COUNT(*) as total FROM services WHERE status = 'active'").first(),
+        c.env.DB.prepare("SELECT COUNT(*) as total FROM categories").first()
+      ])
+
+      if (servicesCount) totalServices = (servicesCount as any).total || 0
+      if (categoriesCount) totalCategories = (categoriesCount as any).total || 0
+    } catch (error) {
+      // Fallback aman jika database kosong / belum migrasi
+    }
+
+    // 2. Ambil pengaturan dinamis dari KV jika tersedia
     let config = {
       siteName: 'SMMPedia',
       primaryColor: '#2563eb'
@@ -25,13 +37,23 @@ export default createRoute(
 
     return c.render(
       <div class="min-h-screen flex flex-col">
-        {/* MENGGUNAKAN NAVBAR KHUSUS FRONTEND YANG ISOLATIF */}
+        {/* Navbar khusus publik terluar */}
         <NavbarFrontend />
         
         <main class="flex-grow flex items-center justify-center bg-white dark:bg-gray-900 transition-colors duration-200">
-          <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20 text-center">
-            <div class="inline-flex items-center justify-center p-4 bg-blue-50 dark:bg-blue-900/20 rounded-full mb-8">
-              <i data-lucide="rocket" class="w-10 h-10 text-brand"></i>
+          <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 text-center">
+            
+            {/* BADGE STATISTIK LIVE */}
+            <div class="inline-flex flex-wrap items-center justify-center gap-3 bg-gray-50 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-700/60 px-4 py-2 rounded-full mb-8 shadow-sm">
+              <span class="flex items-center text-xs font-semibold text-gray-600 dark:text-gray-300">
+                <i data-lucide="layers" class="w-4 h-4 mr-1.5 text-brand"></i>
+                <strong class="text-gray-900 dark:text-white mr-1">{totalCategories.toLocaleString('id-ID')}</strong> Kategori
+              </span>
+              <span class="text-gray-300 dark:text-gray-600">|</span>
+              <span class="flex items-center text-xs font-semibold text-gray-600 dark:text-gray-300">
+                <i data-lucide="server" class="w-4 h-4 mr-1.5 text-green-500"></i>
+                <strong class="text-gray-900 dark:text-white mr-1">{totalServices.toLocaleString('id-ID')}</strong> Layanan Aktif
+              </span>
             </div>
             
             <h1 class="text-4xl tracking-tight font-extrabold text-gray-900 dark:text-white sm:text-5xl md:text-6xl mb-6">
@@ -64,7 +86,7 @@ export default createRoute(
                 <p class="text-gray-500 dark:text-gray-400 text-sm">Sistem kami dilengkapi dengan penguncian Idempotency untuk mencegah duplikasi pesanan.</p>
               </div>
               <div class="bg-gray-50 dark:bg-gray-800 p-6 rounded-xl border border-gray-100 dark:border-gray-700">
-                <i data-lucide="server" class="w-8 h-8 text-brand mb-4"></i>
+                <i data-lucide="code-2" class="w-8 h-8 text-brand mb-4"></i>
                 <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-2">API Modular</h3>
                 <p class="text-gray-500 dark:text-gray-400 text-sm">Dukungan penuh untuk integrasi kustom dan penerimaan webhook secara real-time.</p>
               </div>
