@@ -9,7 +9,6 @@ export default createRoute(
     cacheControl: 'max-age=300, stale-while-revalidate=600',
   }),
   async (c) => {
-    // Mengambil konfigurasi dinamis dari KV
     let config = {
       siteName: 'SMMPedia',
       primaryColor: '#2563eb'
@@ -21,13 +20,13 @@ export default createRoute(
         config = JSON.parse(kvConfigRaw)
       }
     } catch (e) {
-      // Abaikan jika KV belum diatur
+      // Abaikan jika KV kosong
     }
 
     return c.render(
       <div class="min-h-screen flex flex-col">
-        {/* MEMATIKAN TAMPILAN SALDO DI HALAMAN DEPAN SECARA TOTAL */}
-        <Navbar showBalance={false} />
+        {/* FIX: Mengunci status isLoggedIn ke false khusus di halaman terluar (Frontpage) */}
+        <Navbar showBalance={false} isLoggedIn={false} />
         
         <main class="flex-grow flex items-center justify-center bg-white dark:bg-gray-900 transition-colors duration-200">
           <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20 text-center">
