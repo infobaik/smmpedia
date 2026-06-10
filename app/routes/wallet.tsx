@@ -6,7 +6,6 @@ const routeHandler = async (c: any) => {
   const user = await c.env.DB.prepare('SELECT balance FROM users WHERE id = ?1').bind(userSession.userId).first()
   const balance = user?.balance || 0
 
-  // Ambil riwayat deposit (invoice) pengguna
   const depositsData = await c.env.DB.prepare('SELECT id, amount, status, created_at, payment_link FROM deposits WHERE user_id = ?1 ORDER BY created_at DESC LIMIT 20').bind(userSession.userId).all()
   const deposits = depositsData.results || []
 
@@ -17,7 +16,6 @@ const routeHandler = async (c: any) => {
         
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
           
-          {/* Kolom Buat Tagihan QRIS */}
           <div class="lg:col-span-1 space-y-6">
             <div class="bg-gradient-to-br from-blue-600 to-brand p-6 rounded-2xl text-white shadow-lg text-center">
               <p class="text-blue-100 text-sm font-medium mb-1">Saldo Tersedia</p>
@@ -30,7 +28,7 @@ const routeHandler = async (c: any) => {
                 <div id="depositAlert" class="hidden p-3 rounded-lg text-sm font-medium"></div>
                 <div>
                   <label class="block text-sm font-semibold mb-1">Nominal Deposit (Rp)</label>
-                  <input type="number" id="depositAmount" min="1000" required placeholder="Min. 10000" class="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-brand font-bold" />
+                  <input type="number" id="depositAmount" min="10000" required placeholder="Min. 10000" class="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-brand font-bold" />
                 </div>
                 <button type="submit" id="submitDepositBtn" class="w-full bg-brand text-white font-bold p-3 rounded-lg hover:opacity-90 transition flex items-center justify-center">
                   <i data-lucide="qr-code" class="w-5 h-5 mr-2"></i> Buat Tagihan QRIS
@@ -39,7 +37,6 @@ const routeHandler = async (c: any) => {
             </div>
           </div>
 
-          {/* Kolom Riwayat Deposit */}
           <div class="lg:col-span-2 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
             <div class="p-4 border-b border-gray-200 dark:border-gray-700">
               <h2 class="text-lg font-bold">Riwayat Deposit (Invoice)</h2>
@@ -85,6 +82,11 @@ const routeHandler = async (c: any) => {
       </div>
 
       <script dangerouslySetInnerHTML={{ __html: `
+        function getCookieValue(name) {
+          const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+          return match ? match[2] : null;
+        }
+
         document.getElementById('depositForm').addEventListener('submit', async (e) => {
           e.preventDefault();
           const btn = document.getElementById('submitDepositBtn');
@@ -96,9 +98,13 @@ const routeHandler = async (c: any) => {
           alertBox.classList.add('hidden');
 
           try {
+            const token = getCookieValue('user_token');
             const response = await fetch('/api/payment/deposit', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: { 
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + token 
+              },
               body: JSON.stringify({ amount })
             });
             const data = await response.json();
@@ -106,8 +112,13 @@ const routeHandler = async (c: any) => {
             if (data.success) {
               window.location.href = data.payment_url;
             } else {
-              alertBox.textContent = data.error || 'Terjadi kesalahan sistem.';
-              alertBox.className = 'p-3 rounded-lg text-sm font-medium bg-red-100 text-red-700 mb-4 block';
+              // Menampilkan Response Error Asli dari Gateway
+              let errorMsg = data.error || 'Terjadi kesalahan sistem.';
+              if (data.gateway_response) {
+                errorMsg += '\\n\\nRespon Gateway: ' + JSON.stringify(data.gateway_response, null, 2);
+              }
+              alertBox.innerText = errorMsg;
+              alertBox.className = 'p-3 rounded-lg text-[11px] font-mono bg-red-100 text-red-700 mb-4 block whitespace-pre-wrap text-left';
             }
           } catch (err) {
             alertBox.textContent = 'Gagal terhubung ke server.';
