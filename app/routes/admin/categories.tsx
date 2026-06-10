@@ -1,7 +1,8 @@
 import { createRoute } from 'honox/factory'
 import AdminLayout from '../../components/AdminLayout'
 
-export default createRoute(async (c) => {
+// 1. Ekstrak seluruh logika ke dalam satu variabel fungsi pembantu (handler)
+const routeHandler = async (c: any) => {
   let message = null
   let isSuccess = false
 
@@ -27,7 +28,6 @@ export default createRoute(async (c) => {
     } else if (action === 'delete') {
       const id = String(body.id)
       try {
-        // Proteksi: Cek apakah kategori ini masih menempel pada produk/layanan di tabel services
         const check = await c.env.DB.prepare('SELECT id FROM services WHERE category_id = ?1 LIMIT 1').bind(id).first()
         
         if (check) {
@@ -58,7 +58,6 @@ export default createRoute(async (c) => {
     }
   }
 
-  // Mengambil daftar seluruh kategori
   const categoriesData = await c.env.DB.prepare('SELECT * FROM categories ORDER BY name ASC').all()
   const categories = categoriesData.results || []
 
@@ -142,7 +141,6 @@ export default createRoute(async (c) => {
           </div>
         </div>
 
-        {/* Modal Edit Kategori (Akan terpicu jika tombol Edit di klik) */}
         <div id="editModal" class="hidden fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
           <div class="bg-white dark:bg-gray-800 rounded-xl shadow-lg border border-gray-200 dark:border-gray-700 w-full max-w-md overflow-hidden">
             <div class="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
@@ -186,4 +184,8 @@ export default createRoute(async (c) => {
     </AdminLayout>,
     { title: 'Master Kategori' }
   )
-})
+}
+
+// 2. DAFTARKAN HANDLER UNTUK KEDUA METODE (SANGAT KRUSIAL)
+export const POST = createRoute(routeHandler)
+export default createRoute(routeHandler) // Ini untuk metode GET
