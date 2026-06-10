@@ -1,7 +1,7 @@
 import { createRoute } from 'honox/factory'
 import AdminLayout from '../../components/AdminLayout'
 
-export default createRoute(async (c) => {
+const routeHandler = async (c: any) => {
   let message = null
 
   if (c.req.method === 'POST') {
@@ -10,7 +10,6 @@ export default createRoute(async (c) => {
     const adjustment = parseFloat(String(body.amount))
 
     try {
-      // Adjustment bisa positif (suntik saldo) atau negatif (potong saldo)
       await c.env.DB.prepare('UPDATE users SET balance = balance + ?1 WHERE id = ?2')
         .bind(adjustment, userId).run()
       message = "Saldo pengguna berhasil disesuaikan."
@@ -54,7 +53,7 @@ export default createRoute(async (c) => {
                     <td class="px-6 py-4 text-right">
                       <form method="POST" class="inline-flex items-center">
                         <input type="hidden" name="user_id" value={u.id} />
-                        <input type="number" name="amount" placeholder="Nominal (+/-)" required class="w-32 bg-gray-50 border border-gray-300 rounded-l-lg px-2 py-1.5 outline-none text-xs" />
+                        <input type="number" step="0.01" name="amount" placeholder="Nominal (+/-)" required class="w-32 bg-gray-50 border border-gray-300 rounded-l-lg px-2 py-1.5 outline-none text-xs" />
                         <button type="submit" class="bg-slate-800 text-white px-3 py-1.5 rounded-r-lg text-xs font-semibold hover:bg-slate-700 transition">Update</button>
                       </form>
                     </td>
@@ -68,4 +67,7 @@ export default createRoute(async (c) => {
     </AdminLayout>,
     { title: 'Pengguna' }
   )
-})
+}
+
+export const POST = createRoute(routeHandler)
+export default createRoute(routeHandler)
