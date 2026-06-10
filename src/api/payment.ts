@@ -1,4 +1,7 @@
+// src/api/payment.ts
 import { Hono } from 'hono'
+import { getCookie } from 'hono/cookie'
+import { verify } from 'hono/jwt'
 import type { Bindings } from '../index'
 
 export const paymentRouter = new Hono<{ Bindings: Bindings }>()
@@ -7,15 +10,29 @@ export const paymentRouter = new Hono<{ Bindings: Bindings }>()
 // DEPOSIT TRIGGER (MENGIRIM DATA KE GATEWAY)
 // =========================================================
 paymentRouter.post('/deposit', async (c) => {
-  const userSession = c.get('user')
+  // 1. Ekstrak dan verifikasi Token secara manual untuk jalur API
+  const token = getCookie(c, 'user_token')
+  if (!token) {
+    return c.json({ error: 'Sesi tidak valid, silakan muat ulang halaman atau login kembali.' }, 401)
+  }
+
+  let userId = null;
+  try {
+    const decoded = await verify(token, c.env.JWT_SECRET, 'HS256')
+    userId = decoded.userId // Mendapatkan userId dengan aman
+  } catch (e) {
+    return c.json({ error: 'Sesi Anda telah kedaluwarsa.' }, 401)
+  }
+
   const { amount } = await c.req.json()
 
-  const user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?1').bind(userSession.userId).first()
+  // 2. Ambil data user menggunakan userId yang sudah divalidasi
+  const user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?1').bind(userId).first()
   if (!user || !user.name || !user.whatsapp) {
     return c.json({ error: 'Harap lengkapi Nama dan WhatsApp di profil sebelum melakukan deposit.' }, 400)
   }
 
-  // Mengambil konfigurasi murni dari DATABASE (Bukan KV)
+  // 3. Ambil konfigurasi Gateway dari Database
   const gateway = await c.env.DB.prepare("SELECT api_url, api_key FROM gateway_settings WHERE id = 'qris'").first()
   if (!gateway || !gateway.api_url || !gateway.api_key) {
     return c.json({ error: 'Sistem Payment Gateway belum dikonfigurasi oleh Admin.' }, 500)
@@ -71,7 +88,7 @@ paymentRouter.post('/webhook', async (c) => {
   const signatureHeader = c.req.header('X-Signature')
   if (!signatureHeader) return c.json({ error: 'Missing Signature' }, 403)
 
-  // Validasi HMAC SHA-256 menggunakan API KEY yang SAMA
+  // Validasi HMAC SHA-256
   const encoder = new TextEncoder()
   const key = await crypto.subtle.importKey(
     'raw',
