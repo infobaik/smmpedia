@@ -1,12 +1,11 @@
-// app/routes/admin/_middleware.ts
-import { createMiddleware } from 'hono/factory'
+import { createRoute } from 'honox/factory'
 
-export default createMiddleware(async (c, next) => {
-  // Middleware sebelumnya (_middleware.ts global) sudah menjamin c.get('user') ada
+export default createRoute(async (c, next) => {
+  // Data user sudah dipastikan ada karena telah melewati _middleware.ts global
   const user = c.get('user')
 
+  // Isolasi Ketat: Jika bukan admin, tendang kembali ke Dasbor Member
   if (!user || user.role !== 'admin') {
-    // Jika member biasa mencoba masuk admin, tendang kembali ke dasbor member
     return c.redirect('/dashboard')
   }
 
