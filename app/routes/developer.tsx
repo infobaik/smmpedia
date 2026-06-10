@@ -11,7 +11,10 @@ const routeHandler = async (c: any) => {
   if (c.req.method === 'POST') {
     const body = await c.req.parseBody()
     if (body.action === 'generate_api') {
-      const newApiKey = `sk_live_${crypto.randomUUID().replace(/-/g, '')}`
+      
+      // MENGGUNAKAN FORMAT BARU: sp_uuid
+      const newApiKey = `sp_${crypto.randomUUID()}`
+      
       await c.env.DB.prepare('UPDATE users SET api_key = ?1 WHERE id = ?2').bind(newApiKey, userSession.userId).run()
       message = "API Key baru berhasil di-generate!"
       isSuccess = true
@@ -36,7 +39,7 @@ const routeHandler = async (c: any) => {
   const domain = c.req.header('host')
   const baseUrl = `${protocol}://${domain}`
   
-  const referralLink = user.referral_code ? `${baseUrl}/register?ref=${user.referral_code}` : ''
+  const referralLink = user?.referral_code ? `${baseUrl}/register?ref=${user.referral_code}` : ''
 
   return c.render(
     <MemberLayout title="Developer & Referral" balance={balance}>
@@ -59,7 +62,7 @@ const routeHandler = async (c: any) => {
               <h2 class="text-lg font-bold mb-4 flex items-center text-gray-900 dark:text-white">
                 <i data-lucide="code" class="w-5 h-5 mr-2 text-brand"></i> Kredensial API v1
               </h2>
-              {user.api_key ? (
+              {user?.api_key ? (
                 <div class="space-y-4">
                   <div>
                     <label class="text-xs font-bold text-gray-500 uppercase">API Key Anda</label>
@@ -88,7 +91,7 @@ const routeHandler = async (c: any) => {
               <p class="text-xs text-gray-500 mb-4">Sistem akan menembak endpoint Anda jika status pesanan berubah. Payload ditandatangani dengan HMAC SHA-256 menggunakan API Key Anda pada header <code>X-SMM-Signature</code>.</p>
               <form method="POST" class="space-y-3">
                 <input type="hidden" name="action" value="save_webhook" />
-                <input type="url" name="webhook_url" placeholder="https://domain-anda.com/webhook" value={user.webhook_url || ''} class="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg p-3 font-mono text-sm outline-none focus:ring-2 focus:ring-brand" />
+                <input type="url" name="webhook_url" placeholder="https://domain-anda.com/webhook" value={user?.webhook_url || ''} class="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg p-3 font-mono text-sm outline-none focus:ring-2 focus:ring-brand" />
                 <button type="submit" class="w-full bg-gray-800 dark:bg-gray-700 text-white font-bold p-2.5 rounded-xl hover:opacity-90 transition">Simpan URL Endpoint</button>
               </form>
             </div>
@@ -102,17 +105,17 @@ const routeHandler = async (c: any) => {
             
             <div class="bg-white dark:bg-gray-800 rounded-xl p-4 mb-5 border border-gray-100 dark:border-gray-700 text-center">
               <span class="block text-sm text-gray-500 mb-1">Total Komisi Terkumpul</span>
-              <span class="text-3xl font-extrabold text-green-600">Rp {(user.commission_balance || 0).toLocaleString('id-ID')}</span>
+              <span class="text-3xl font-extrabold text-green-600">Rp {(user?.commission_balance || 0).toLocaleString('id-ID')}</span>
             </div>
 
-            {user.referral_code ? (
+            {user?.referral_code ? (
               <div>
                 <label class="text-xs font-bold text-gray-500 uppercase">Tautan Undangan Anda</label>
                 <div class="flex mt-1 mb-4">
                   <input type="text" readonly value={referralLink} class="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-l-lg p-2.5 font-mono text-sm outline-none" />
                   <button onclick="navigator.clipboard.writeText('${referralLink}')" class="bg-indigo-600 text-white px-4 rounded-r-lg hover:bg-indigo-700 font-bold text-sm">Copy</button>
                 </div>
-                <p class="text-xs text-gray-500">Bagikan tautan ini. Anda akan mendapatkan saldo komisi setiap kali downline Anda melakukan deposit atau pendaftaran (tergantung kebijakan admin).</p>
+                <p class="text-xs text-gray-500">Bagikan tautan ini. Anda akan mendapatkan saldo komisi setiap kali downline Anda mendaftar atau bertransaksi.</p>
               </div>
             ) : (
               <form method="POST">
