@@ -1,50 +1,155 @@
+// app/routes/dashboard.tsx
 import { createRoute } from 'honox/factory'
 import MemberLayout from '../components/MemberLayout'
 
 const routeHandler = async (c: any) => {
   const userSession = c.get('user')
-  const [userData, ordersData] = await c.env.DB.batch([
-    c.env.DB.prepare('SELECT balance FROM users WHERE id = ?1').bind(userSession.userId),
-    c.env.DB.prepare('SELECT COUNT(*) as count FROM orders WHERE user_id = ?1').bind(userSession.userId)
-  ])
+  
+  // Ambil saldo pengguna
+  const user = await c.env.DB.prepare('SELECT balance FROM users WHERE id = ?1').bind(userSession.userId).first()
+  const balance = user?.balance || 0
 
-  const balance = userData.results[0]?.balance || 0
-  const totalOrders = ordersData.results[0]?.count || 0
+  // Ambil statistik pesanan
+  const statsData = await c.env.DB.prepare(`
+    SELECT status, COUNT(*) as count FROM orders WHERE user_id = ?1 GROUP BY status
+  `).bind(userSession.userId).all()
+  
+  const stats = { pending: 0, processing: 0, success: 0, error: 0, total: 0 }
+  statsData.results?.forEach((row: any) => {
+    if (row.status === 'pending') stats.pending = row.count
+    else if (row.status === 'processing') stats.processing = row.count
+    else if (row.status === 'success') stats.success = row.count
+    else if (row.status === 'error' || row.status === 'canceled' || row.status === 'partial') stats.error += row.count
+    stats.total += row.count
+  })
+
+  // Ambil 5 pesanan terakhir
+  const recentOrdersData = await c.env.DB.prepare(`
+    SELECT o.id, s.name, o.quantity, o.charge, o.status, o.created_at 
+    FROM orders o JOIN services s ON o.service_id = s.id 
+    WHERE o.user_id = ?1 ORDER BY o.created_at DESC LIMIT 5
+  `).bind(userSession.userId).all()
+  
+  const recentOrders = recentOrdersData.results || []
 
   return c.render(
-    <MemberLayout title="Dasbor Member" balance={balance}>
-      <div class="p-6 md:p-8">
-        <div class="mb-8">
-          <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Selamat Datang!</h1>
-          <p class="text-sm text-gray-500 dark:text-gray-400">Pantau aktivitas akun Anda di sini.</p>
+    <MemberLayout title="Dasbor" balance={balance}>
+      <div class="p-6 md:p-8 max-w-7xl mx-auto space-y-8">
+        
+        <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-gray-200 dark:border-gray-700 pb-4">
+          <div>
+            <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Dasbor SMMPedia</h1>
+            <p class="text-sm text-gray-500 mt-1">Selamat datang kembali! Pantau aktivitas dan pesanan Anda di sini.</p>
+          </div>
+          <a href="/order" class="bg-brand text-white font-bold py-2.5 px-6 rounded-lg hover:opacity-90 transition shadow-sm flex items-center">
+            <i data-lucide="plus-circle" class="w-5 h-5 mr-2"></i> Pesanan Baru
+          </a>
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-          <div class="bg-gradient-to-br from-blue-500 to-brand p-6 rounded-2xl text-white shadow-lg flex flex-col justify-center">
-            <div class="flex items-center space-x-4">
-              <div class="p-4 bg-white/20 rounded-xl"><i data-lucide="shopping-bag" class="w-8 h-8"></i></div>
-              <div>
-                <p class="text-blue-100 text-sm font-medium">Total Pesanan</p>
-                <h2 class="text-3xl font-bold">{totalOrders}</h2>
-              </div>
+        {/* TOMBOL PINTASAN AKSES RESELLER & REFERRAL */}
+        <div class="bg-gradient-to-r from-indigo-600 to-blue-600 rounded-2xl p-6 text-white shadow-lg flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div class="flex items-center">
+            <div class="bg-white/20 p-3 rounded-full mr-4">
+              <i data-lucide="code-2" class="w-8 h-8 text-white"></i>
             </div>
-            <a href="/order" class="mt-6 text-center bg-white/20 hover:bg-white/30 text-white py-2.5 rounded-xl font-medium transition text-sm">
-              Buat Pesanan Baru
-            </a>
+            <div>
+              <h2 class="text-lg font-bold">API Reseller & Program Referral</h2>
+              <p class="text-sm text-indigo-100 mt-1">Integrasikan layanan SMMPedia ke website Anda atau bagikan kode referral untuk komisi pasif.</p>
+            </div>
           </div>
+          <a href="/developer" class="w-full sm:w-auto bg-white text-indigo-700 font-bold py-3 px-6 rounded-xl hover:bg-indigo-50 transition whitespace-nowrap text-center shadow-sm">
+            Akses Reseller Area <i data-lucide="arrow-right" class="w-4 h-4 inline ml-1"></i>
+          </a>
+        </div>
 
-          <div class="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm flex flex-col justify-center">
-            <p class="text-gray-500 dark:text-gray-400 text-sm font-medium mb-1">Saldo Tersedia</p>
-            <h2 class="text-3xl font-bold text-gray-900 dark:text-white">Rp {balance.toLocaleString('id-ID')}</h2>
-            <a href="/wallet" class="mt-6 text-center bg-gray-50 dark:bg-gray-700 hover:bg-gray-100 text-brand py-2.5 rounded-xl font-medium transition text-sm border border-gray-200 dark:border-gray-600">
-              Isi Saldo (Top Up)
-            </a>
+        {/* KOTAK STATISTIK */}
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div class="bg-white dark:bg-gray-800 p-5 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm flex items-center">
+            <div class="bg-blue-100 dark:bg-blue-900/40 p-3 rounded-lg mr-4"><i data-lucide="shopping-bag" class="w-6 h-6 text-blue-600 dark:text-blue-400"></i></div>
+            <div>
+              <p class="text-sm text-gray-500 dark:text-gray-400 font-medium">Total Pesanan</p>
+              <p class="text-2xl font-bold text-gray-900 dark:text-white">{stats.total}</p>
+            </div>
+          </div>
+          <div class="bg-white dark:bg-gray-800 p-5 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm flex items-center">
+            <div class="bg-amber-100 dark:bg-amber-900/40 p-3 rounded-lg mr-4"><i data-lucide="loader" class="w-6 h-6 text-amber-600 dark:text-amber-400"></i></div>
+            <div>
+              <p class="text-sm text-gray-500 dark:text-gray-400 font-medium">Memproses</p>
+              <p class="text-2xl font-bold text-gray-900 dark:text-white">{stats.processing + stats.pending}</p>
+            </div>
+          </div>
+          <div class="bg-white dark:bg-gray-800 p-5 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm flex items-center">
+            <div class="bg-green-100 dark:bg-green-900/40 p-3 rounded-lg mr-4"><i data-lucide="check-circle" class="w-6 h-6 text-green-600 dark:text-green-400"></i></div>
+            <div>
+              <p class="text-sm text-gray-500 dark:text-gray-400 font-medium">Selesai</p>
+              <p class="text-2xl font-bold text-gray-900 dark:text-white">{stats.success}</p>
+            </div>
+          </div>
+          <div class="bg-white dark:bg-gray-800 p-5 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm flex items-center">
+            <div class="bg-red-100 dark:bg-red-900/40 p-3 rounded-lg mr-4"><i data-lucide="x-circle" class="w-6 h-6 text-red-600 dark:text-red-400"></i></div>
+            <div>
+              <p class="text-sm text-gray-500 dark:text-gray-400 font-medium">Gagal/Error</p>
+              <p class="text-2xl font-bold text-gray-900 dark:text-white">{stats.error}</p>
+            </div>
           </div>
         </div>
+
+        {/* TABEL PESANAN TERAKHIR */}
+        <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
+          <div class="p-5 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
+            <h2 class="text-lg font-bold text-gray-900 dark:text-white">Pesanan Terakhir</h2>
+            <a href="/history" class="text-sm text-brand font-semibold hover:underline">Lihat Semua</a>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm text-left">
+              <thead class="bg-gray-50 dark:bg-gray-900 text-gray-700 dark:text-gray-300">
+                <tr>
+                  <th class="px-6 py-3 font-semibold">ID & Layanan</th>
+                  <th class="px-6 py-3 font-semibold">Jumlah</th>
+                  <th class="px-6 py-3 font-semibold">Harga</th>
+                  <th class="px-6 py-3 font-semibold text-center">Status</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+                {recentOrders.length === 0 ? (
+                  <tr><td colSpan={4} class="px-6 py-8 text-center text-gray-500">Belum ada riwayat pesanan.</td></tr>
+                ) : (
+                  recentOrders.map((o: any) => {
+                    let statusColor = 'bg-gray-100 text-gray-800'
+                    if (o.status === 'success') statusColor = 'bg-green-100 text-green-700'
+                    else if (o.status === 'processing') statusColor = 'bg-blue-100 text-blue-700'
+                    else if (o.status === 'pending') statusColor = 'bg-amber-100 text-amber-700'
+                    else if (['error', 'canceled', 'partial'].includes(o.status)) statusColor = 'bg-red-100 text-red-700'
+                    
+                    const orderDate = new Date(o.created_at).toLocaleDateString('id-ID', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+
+                    return (
+                      <tr class="hover:bg-gray-50 dark:hover:bg-gray-750 transition">
+                        <td class="px-6 py-4">
+                          <div class="font-bold text-gray-900 dark:text-white line-clamp-1">{o.name}</div>
+                          <div class="text-xs text-gray-500 mt-1 font-mono">{o.id.substring(0,8)} • {orderDate}</div>
+                        </td>
+                        <td class="px-6 py-4 font-semibold text-gray-700 dark:text-gray-300">{o.quantity.toLocaleString('id-ID')}</td>
+                        <td class="px-6 py-4 font-bold text-brand">Rp {o.charge.toLocaleString('id-ID')}</td>
+                        <td class="px-6 py-4 text-center">
+                          <span class={`px-2.5 py-1 rounded-md text-[10px] font-extrabold uppercase tracking-wide ${statusColor}`}>
+                            {o.status}
+                          </span>
+                        </td>
+                      </tr>
+                    )
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
       </div>
     </MemberLayout>,
-    { title: 'Dasbor' }
+    { title: 'Dasbor SMMPedia' }
   )
 }
-export const POST = createRoute(routeHandler)
+
+export const GET = createRoute(routeHandler)
 export default createRoute(routeHandler)
