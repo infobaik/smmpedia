@@ -1,11 +1,9 @@
-// src/api/orders.ts
 import { Hono } from 'hono'
 import { fetchMedanpedia } from './medanpedia'
 import type { Bindings } from '../index'
 
 export const ordersRouter = new Hono<{ Bindings: Bindings }>()
 
-// Fungsi helper dinamis untuk custom provider
 function buildPayload(templateStr: string, data: Record<string, any>) {
   let parsedStr = templateStr;
   for (const [key, value] of Object.entries(data)) {
@@ -17,40 +15,44 @@ function buildPayload(templateStr: string, data: Record<string, any>) {
 ordersRouter.post('/create', async (c) => {
   try {
     const body = await c.req.json()
-    const { userId, localServiceId, link, quantity, mediaUrl, idempotencyKey } = body
+    // MURNI TANPA MEDIA UPLOAD
+    const { userId, localServiceId, link, quantity, idempotencyKey } = body
 
     if (!userId || !localServiceId || !link || !quantity || !idempotencyKey) {
       return c.json({ error: 'Data pesanan tidak lengkap' }, 400)
     }
 
+    // Proteksi Double-Click (Idempotency)
     try {
       await c.env.DB.prepare('INSERT INTO idempotency_store (key) VALUES (?1)').bind(idempotencyKey).run()
     } catch {
-      return c.json({ error: 'Pesanan duplikat' }, 409)
+      return c.json({ error: 'Pesanan sedang diproses, harap tunggu...' }, 409)
     }
 
-    const service = await c.env.DB.prepare('SELECT * FROM services WHERE id = ?1').bind(localServiceId).first()
-    if (!service) return c.json({ error: 'Layanan tidak valid' }, 404)
+    // Pengecekan Service menggunakan provider_slug (sesuai normalisasi DB terbaru)
+    const service = await c.env.DB.prepare('SELECT * FROM services WHERE id = ?1 AND status = "active"').bind(localServiceId).first()
+    if (!service) return c.json({ error: 'Layanan tidak valid atau sedang tidak aktif' }, 404)
 
     const charge = (Number(service.rate) + Number(service.margin || 0)) * (quantity / 1000)
 
+    // Pengecekan dan Pemotongan Saldo Atomik
     const deductResult = await c.env.DB.prepare(`
       UPDATE users SET balance = balance - ?1 WHERE id = ?2 AND balance >= ?1
     `).bind(charge, userId).run()
 
-    if (deductResult.meta.changes === 0) return c.json({ error: 'Saldo tidak mencukupi' }, 400)
+    if (deductResult.meta.changes === 0) return c.json({ error: 'Saldo tidak mencukupi untuk pesanan ini' }, 400)
 
     let providerOrderIdStr = null;
     let isNetworkError = false;
     let providerErrorMessage = null;
 
     // ==========================================
-    // ROUTING PROVIDER DINAMIS
+    // ROUTING PROVIDER
     // ==========================================
-    if (service.provider === 'medanpedia') {
+    if (service.provider_slug === 'medanpedia') {
       try {
         const providerResponse = await fetchMedanpedia(c.env.MEDANPEDIA_API_KEY, 'add', {
-          service: service.product_provider_id, // Menggunakan kolom yang benar
+          service: service.product_provider_id,
           link: link,
           quantity: quantity
         })
@@ -67,11 +69,11 @@ ordersRouter.post('/create', async (c) => {
       }
 
     } else {
-      // Menangani Custom Provider
-      const customProvider = await c.env.DB.prepare('SELECT * FROM custom_providers WHERE slug = ?1 AND status = "active"').bind(service.provider).first()
+      // Routing ke Custom Provider
+      const customProvider = await c.env.DB.prepare('SELECT * FROM providers WHERE slug = ?1 AND status = "active"').bind(service.provider_slug).first()
       
       if (!customProvider) {
-        providerErrorMessage = "Konfigurasi Custom Provider tidak ditemukan atau tidak aktif."
+        providerErrorMessage = "Konfigurasi Custom Provider sedang offline."
       } else {
         try {
           const payload = buildPayload(customProvider.order_body_template as string, { 
@@ -105,7 +107,7 @@ ordersRouter.post('/create', async (c) => {
           if (customResult[mapping.order_id_key]) {
              providerOrderIdStr = customResult[mapping.order_id_key].toString()
           } else {
-             providerErrorMessage = customResult[mapping.error_key] || "Penyedia menolak pesanan tanpa alasan spesifik."
+             providerErrorMessage = customResult[mapping.error_key] || "Pesanan ditolak oleh server pusat."
           }
         } catch (e) {
           isNetworkError = true
@@ -114,32 +116,32 @@ ordersRouter.post('/create', async (c) => {
     }
 
     // ==========================================
-    // PENANGANAN HASIL ROUTING
+    // FINALISASI HASIL
     // ==========================================
     if (isNetworkError) {
       const localOrderId = crypto.randomUUID()
       await c.env.DB.prepare(`
-        INSERT INTO orders (id, user_id, service_id, provider_order_id, link, quantity, charge, reference_media_url, status)
-        VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, 'manual_reconciliation')
-      `).bind(localOrderId, userId, localServiceId, link, quantity, charge, mediaUrl || null).run()
+        INSERT INTO orders (id, user_id, service_id, provider_order_id, link, quantity, charge, status)
+        VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, 'manual_reconciliation')
+      `).bind(localOrderId, userId, localServiceId, link, quantity, charge).run()
 
-      return c.json({ success: true, orderId: localOrderId, message: 'Pesanan diterima (Menunggu rekonsiliasi jaringan).' })
+      return c.json({ success: true, orderId: localOrderId, message: 'Pesanan diterima (API Gangguan, masuk antrean manual).' })
     }
 
     if (providerErrorMessage) {
-      // Refund
+      // Refund instan jika Provider Pusat menolak
       await c.env.DB.prepare(`UPDATE users SET balance = balance + ?1 WHERE id = ?2`).bind(charge, userId).run()
-      return c.json({ error: `Ditolak Provider: ${providerErrorMessage}. Saldo dikembalikan.` }, 400)
+      return c.json({ error: `Gagal diproses pusat: ${providerErrorMessage}. Saldo dikembalikan.` }, 400)
     }
 
-    // Sukses Normal
+    // Berhasil diteruskan ke pusat
     const localOrderId = crypto.randomUUID()
     await c.env.DB.prepare(`
-      INSERT INTO orders (id, user_id, service_id, provider_order_id, link, quantity, charge, reference_media_url, status)
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending')
-    `).bind(localOrderId, userId, localServiceId, providerOrderIdStr, link, quantity, charge, mediaUrl || null).run()
+      INSERT INTO orders (id, user_id, service_id, provider_order_id, link, quantity, charge, status)
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending')
+    `).bind(localOrderId, userId, localServiceId, providerOrderIdStr, link, quantity, charge).run()
 
-    return c.json({ success: true, orderId: localOrderId, message: 'Pesanan berhasil dikirim ke provider.' })
+    return c.json({ success: true, orderId: localOrderId, message: 'Pesanan berhasil dikirim ke server pusat.' })
 
   } catch (error) {
     return c.json({ error: 'Terjadi kesalahan sistem internal.' }, 500)
