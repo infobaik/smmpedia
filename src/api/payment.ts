@@ -10,8 +10,13 @@ export const paymentRouter = new Hono<{ Bindings: Bindings }>()
 // DEPOSIT TRIGGER (MENGIRIM DATA KE GATEWAY)
 // =========================================================
 paymentRouter.post('/deposit', async (c) => {
-  // 1. Ekstrak Token dengan Aman
-  const token = getCookie(c, 'user_token')
+  // 1. Ekstrak Token dari Cookie atau Header Authorization
+  let token = getCookie(c, 'user_token')
+  if (!token) {
+    const authHeader = c.req.header('Authorization')
+    if (authHeader && authHeader.startsWith('Bearer ')) token = authHeader.split(' ')[1]
+  }
+
   if (!token) return c.json({ error: 'Sesi tidak valid.' }, 401)
 
   let userId = null;
@@ -22,7 +27,7 @@ paymentRouter.post('/deposit', async (c) => {
     return c.json({ error: 'Sesi kedaluwarsa.' }, 401)
   }
 
-  // 2. Parse dan Validasi Nominal
+  // 2. Parse Nominal
   let amount = 0;
   try {
     const body = await c.req.json()
@@ -31,29 +36,26 @@ paymentRouter.post('/deposit', async (c) => {
     return c.json({ error: 'Format JSON rusak.' }, 400)
   }
 
-  if (isNaN(amount) || amount < 10000) {
-    return c.json({ error: 'Nominal deposit minimal Rp 10.000.' }, 400)
-  }
+  if (isNaN(amount) || amount < 10000) return c.json({ error: 'Nominal deposit minimal Rp 10.000.' }, 400)
 
-  // 3. Ambil data user dari Database
+  // 3. Ambil data user & config Gateway
   const user = await c.env.DB.prepare('SELECT email, name, whatsapp FROM users WHERE id = ?1').bind(userId).first()
-  if (!user) return c.json({ error: 'Pengguna tidak ditemukan di database.' }, 404)
+  if (!user) return c.json({ error: 'Pengguna tidak ditemukan.' }, 404)
 
-  // 4. Ambil config gateway dari Database Admin
   const gateway = await c.env.DB.prepare("SELECT api_url, api_key FROM gateway_settings WHERE id = 'qris'").first()
   if (!gateway || !gateway.api_url || !gateway.api_key) {
-    return c.json({ error: 'Payment Gateway belum dikonfigurasi oleh Admin di menu Pengaturan.' }, 500)
+    return c.json({ error: 'Payment Gateway belum dikonfigurasi.' }, 500)
   }
 
-  // 5. Normalisasi URL
+  // 4. Normalisasi URL
   const apiUrl = String(gateway.api_url).trim().replace(/\/+$/, '')
   const deposit_id = 'DEP-' + crypto.randomUUID().substring(0, 8).toUpperCase()
   
-  // 6. Format Payload sesuai instruksi (Kosongkan jika tidak ada, jangan diisi dummy)
+  // 5. PAYLOAD: link_name wajib diisi, customer dibiarkan string kosong jika tidak ada
   const payload = {
     order_id: deposit_id, 
     amount: amount,
-    link_name: '', // Dikosongkan sesuai instruksi
+    link_name: 'Deposit Saldo', // Jangan string kosong '', sering memicu Error 400 di Gateway
     customer: {
       name: user.name ? String(user.name).trim() : '',
       wa: user.whatsapp ? String(user.whatsapp).trim() : '',
@@ -61,7 +63,7 @@ paymentRouter.post('/deposit', async (c) => {
     }
   }
 
-  // 7. Eksekusi Request ke Gateway
+  // 6. Request ke Gateway
   try {
     const response = await fetch(`${apiUrl}/trx`, {
       method: 'POST',
@@ -69,7 +71,7 @@ paymentRouter.post('/deposit', async (c) => {
         'Authorization': `Bearer ${gateway.api_key}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'User-Agent': 'SMMPanel-System/1.0'
+        'User-Agent': 'SMMPanel/1.0'
       },
       body: JSON.stringify(payload)
     })
@@ -91,9 +93,11 @@ paymentRouter.post('/deposit', async (c) => {
       return c.json({ success: true, deposit_id, payment_url: result.payment_url })
     }
     
+    // Meneruskan error ASLI dari gateway agar bisa dibaca di frontend
     return c.json({ 
-      error: 'Ditolak oleh Server Gateway.', 
-      gateway_response: result 
+      error: 'Gateway menolak payload (Bad Request).', 
+      gateway_response: result,
+      payload_sent: payload 
     }, 400)
 
   } catch (error: any) {
@@ -102,7 +106,7 @@ paymentRouter.post('/deposit', async (c) => {
 })
 
 // =========================================================
-// WEBHOOK RECEIVER (VALIDASI HMAC DENGAN API KEY)
+// WEBHOOK RECEIVER
 // =========================================================
 paymentRouter.post('/webhook', async (c) => {
   const gateway = await c.env.DB.prepare("SELECT api_key FROM gateway_settings WHERE id = 'qris'").first()
@@ -113,20 +117,11 @@ paymentRouter.post('/webhook', async (c) => {
   if (!signatureHeader) return c.json({ error: 'Header X-Signature hilang' }, 403)
 
   const encoder = new TextEncoder()
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(gateway.api_key as string),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  )
-  
+  const key = await crypto.subtle.importKey('raw', encoder.encode(gateway.api_key as string), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
   const signatureBuffer = await crypto.subtle.sign('HMAC', key, encoder.encode(rawBody))
   const calculatedSignature = Array.from(new Uint8Array(signatureBuffer)).map(b => b.toString(16).padStart(2, '0')).join('')
 
-  if (calculatedSignature !== signatureHeader) {
-    return c.json({ error: 'Tanda tangan Webhook tidak sah' }, 403)
-  }
+  if (calculatedSignature !== signatureHeader) return c.json({ error: 'Tanda tangan Webhook tidak sah' }, 403)
 
   try {
     const decodedPayload = JSON.parse(rawBody)
@@ -141,8 +136,8 @@ paymentRouter.post('/webhook', async (c) => {
         ])
       }
     }
-    return c.json({ success: true, message: 'Webhook sukses divalidasi dan diproses' })
+    return c.json({ success: true, message: 'Webhook sukses' })
   } catch (e) {
-    return c.json({ error: 'Payload bukan JSON yang valid' }, 400)
+    return c.json({ error: 'Payload tidak valid' }, 400)
   }
 })
