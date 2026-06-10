@@ -5,7 +5,7 @@ import { fetchMedanpedia } from '../medanpedia'
 
 export const apiV1Router = new Hono<{ Bindings: Bindings }>()
 
-// Helper untuk format API Custom Provider (Sama seperti frontend)
+// Helper untuk format API Custom Provider
 function buildPayload(templateStr: string, data: Record<string, any>) {
   let parsedStr = templateStr;
   for (const [key, value] of Object.entries(data)) {
@@ -14,10 +14,10 @@ function buildPayload(templateStr: string, data: Record<string, any>) {
   return JSON.parse(parsedStr);
 }
 
-// ENDPOINT UTAMA STANDAR SMM PANEL GLOBAL (POST /api/v1)
-apiV1Router.post('/', async (c) => {
+// Handler Inti API SMM Standard
+const apiHandler = async (c: any) => {
   try {
-    // 1. Dukung berbagai format pengiriman data dari Reseller (JSON / Form Data)
+    // 1. Dukung format pengiriman JSON maupun Form URL-Encoded dari PHP cURL
     let body: any = {}
     const contentType = c.req.header('Content-Type') || ''
     
@@ -27,14 +27,13 @@ apiV1Router.post('/', async (c) => {
       body = await c.req.parseBody()
     }
 
-    // 2. Autentikasi API Key (Terikat ke tabel Users)
+    // 2. Autentikasi API Key 
     const apiKey = body.key || c.req.header('x-api-key')
     if (!apiKey) return c.json({ error: "Autentikasi gagal: Parameter 'key' diperlukan." }, 401)
 
-    const user = await c.env.DB.prepare('SELECT id, balance, status FROM users WHERE api_key = ?1').bind(apiKey).first()
-    
+    // BUG FIXED: Hapus pemanggilan kolom 'status' karena tidak ada di schema.sql tabel users
+    const user = await c.env.DB.prepare('SELECT id, balance FROM users WHERE api_key = ?1').bind(apiKey).first()
     if (!user) return c.json({ error: "Autentikasi gagal: API Key tidak valid." }, 401)
-    if (user.status !== 'active') return c.json({ error: "Akun Anda sedang dibekukan." }, 403)
 
     const action = body.action
 
@@ -49,7 +48,7 @@ apiV1Router.post('/', async (c) => {
     }
 
     // ==========================================
-    // ACTION: Tarik Layanan (MURNI DARI DATABASE LOKAL D1)
+    // ACTION: Tarik Layanan (MURNI DARI LOKAL)
     // ==========================================
     if (action === 'services') {
       const servicesData = await c.env.DB.prepare(`
@@ -59,19 +58,24 @@ apiV1Router.post('/', async (c) => {
         WHERE s.status = 'active'
       `).all()
       
-      // Mengubah nilai 1/0 SQLite ke format Boolean yang dipahami oleh SMM Client
       const formattedServices = servicesData.results?.map((s: any) => ({
-        ...s,
+        service: s.service,
+        name: s.name,
+        category: s.category,
+        type: s.type,
+        rate: s.rate,
+        min: s.min,
+        max: s.max,
         refill: s.refill === 1,
         cancel: s.cancel === 1,
         dripfeed: s.dripfeed === 1
-      }))
+      })) || []
 
       return c.json(formattedServices)
     }
 
     // ==========================================
-    // ACTION: Cek Status Pesanan (MURNI DARI DATABASE LOKAL D1)
+    // ACTION: Cek Status Pesanan (MURNI DARI LOKAL)
     // ==========================================
     if (action === 'status') {
       const orderId = body.order
@@ -87,14 +91,14 @@ apiV1Router.post('/', async (c) => {
       return c.json({
         charge: order.charge,
         start_count: 0,
-        status: order.status, // pending, processing, success, error
+        status: order.status, 
         remains: 0,
         currency: "IDR"
       })
     }
 
     // ==========================================
-    // ACTION: Transaksi Pesanan Baru (VALIDASI SALDO -> CATAT -> FORWARD)
+    // ACTION: Transaksi Pesanan Baru 
     // ==========================================
     if (action === 'add') {
       const { service, link, quantity } = body
@@ -102,7 +106,6 @@ apiV1Router.post('/', async (c) => {
         return c.json({ error: "Parameter service, link, dan quantity wajib diisi." })
       }
 
-      // Validasi layanan di DB Lokal
       const srv = await c.env.DB.prepare('SELECT * FROM services WHERE id = ?1 AND status = "active"').bind(service).first()
       if (!srv) return c.json({ error: "Layanan tidak valid atau sedang offline." })
 
@@ -113,14 +116,12 @@ apiV1Router.post('/', async (c) => {
 
       const charge = (Number(srv.rate) + Number(srv.margin || 0)) * (qtyNum / 1000)
 
-      // 1. Validasi Saldo Reseller (Pemotongan Atomik)
       const deductResult = await c.env.DB.prepare(`
         UPDATE users SET balance = balance - ?1 WHERE id = ?2 AND balance >= ?1
       `).bind(charge, user.id).run()
 
       if (deductResult.meta.changes === 0) return c.json({ error: "Saldo tidak mencukupi untuk melakukan pesanan ini." })
 
-      // 2. Catat Pesanan Lokal (Status Processing)
       const localOrderId = crypto.randomUUID()
       await c.env.DB.prepare(`
         INSERT INTO orders (id, user_id, service_id, link, quantity, charge, status)
@@ -131,7 +132,6 @@ apiV1Router.post('/', async (c) => {
       let providerErrorMessage = null;
       let isNetworkError = false;
 
-      // 3. FORWARD KE PROVIDER (Karena transaksi ini valid)
       if (srv.provider_slug === 'medanpedia') {
         try {
           const providerResponse = await fetchMedanpedia(c.env.MEDANPEDIA_API_KEY, 'add', {
@@ -144,7 +144,6 @@ apiV1Router.post('/', async (c) => {
           isNetworkError = true
         }
       } else {
-        // Logika Eksekusi Custom Provider
         const customProvider = await c.env.DB.prepare('SELECT * FROM providers WHERE slug = ?1 AND status = "active"').bind(srv.provider_slug).first()
         if (customProvider) {
           try {
@@ -176,9 +175,7 @@ apiV1Router.post('/', async (c) => {
         }
       }
 
-      // 4. PENYELESAIAN SAGA (Kompensasi jika provider gagal)
       if (providerErrorMessage) {
-        // Rollback: Refund saldo & Batalkan status
         await c.env.DB.batch([
           c.env.DB.prepare(`UPDATE users SET balance = balance + ?1 WHERE id = ?2`).bind(charge, user.id),
           c.env.DB.prepare(`UPDATE orders SET status = 'canceled' WHERE id = ?1`).bind(localOrderId)
@@ -191,7 +188,6 @@ apiV1Router.post('/', async (c) => {
         return c.json({ order: localOrderId })
       }
 
-      // SUKSES TERKIRIM
       await c.env.DB.prepare(`UPDATE orders SET status = 'pending', provider_order_id = ?1 WHERE id = ?2`).bind(providerOrderIdStr, localOrderId).run()
       return c.json({ order: localOrderId })
     }
@@ -200,4 +196,9 @@ apiV1Router.post('/', async (c) => {
   } catch (err: any) {
     return c.json({ error: "Terjadi kesalahan internal server." }, 500)
   }
-})
+}
+
+// FIX UTAMA: Tangkap semua variasi penulisan URL agar tidak bocor ke 404 Frontend
+apiV1Router.post('', apiHandler)     // Menangkap: /api/v1
+apiV1Router.post('/', apiHandler)    // Menangkap: /api/v1/
+apiV1Router.post('/*', apiHandler)   // Menangkap sub-rute tambahan jika ada
