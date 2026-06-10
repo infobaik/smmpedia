@@ -1,7 +1,7 @@
 import { createRoute } from 'honox/factory'
 import AdminLayout from '../../components/AdminLayout'
 
-export default createRoute(async (c) => {
+const routeHandler = async (c: any) => {
   let message = null
 
   if (c.req.method === 'POST') {
@@ -33,7 +33,6 @@ export default createRoute(async (c) => {
         {message && <div class="p-4 rounded-lg bg-blue-100 text-blue-700 text-sm font-medium mb-6">{message}</div>}
 
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Form Tambah */}
           <div class="bg-white dark:bg-gray-800 p-6 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm h-fit">
             <h2 class="font-bold mb-4 border-b pb-2">Tambah Provider Baru</h2>
             <form method="POST" class="space-y-4 text-sm">
@@ -65,7 +64,6 @@ export default createRoute(async (c) => {
             </form>
           </div>
 
-          {/* Tabel List */}
           <div class="lg:col-span-2 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
             <table class="w-full text-sm text-left">
               <thead class="bg-gray-50 dark:bg-gray-900">
@@ -91,4 +89,7 @@ export default createRoute(async (c) => {
     </AdminLayout>,
     { title: 'Providers' }
   )
-})
+}
+
+export const POST = createRoute(routeHandler)
+export default createRoute(routeHandler)
