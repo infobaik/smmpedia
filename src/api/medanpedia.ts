@@ -21,21 +21,19 @@ export async function fetchMedanpedia(apiKey: string, action: string, data: Reco
 
 medanpediaRouter.post('/sync-services', async (c) => {
   try {
-    // Tarik Data Layanan dari Pusat
+    // 1. Tarik Data Layanan dari Pusat API
     const services = await fetchMedanpedia(c.env.MEDANPEDIA_API_KEY, 'services')
     if (!Array.isArray(services)) return c.json({ error: 'Format respons tidak valid' }, 400)
 
-    // Pastikan Provider "medanpedia" terdaftar agar tidak melanggar Foreign Key
+    // 2. Pastikan Provider "medanpedia" terdaftar
     await c.env.DB.prepare(`
       INSERT INTO providers (slug, name, type, base_url, status)
       VALUES ('medanpedia', 'Medanpedia API', 'native', 'https://medanpedia.com/api/v2', 'active')
       ON CONFLICT(slug) DO NOTHING
     `).run()
 
-    // Ekstrak Kategori Unik dari respons API Pusat
+    // 3. Masukkan Kategori Baru (Sangat hemat D1 Write karena pakai DO NOTHING)
     const uniqueCategories = [...new Set(services.map((s: any) => s.category))]
-
-    // Masukkan Kategori Baru ke Tabel categories
     const catInsertStmts = uniqueCategories.map(catName => {
       const catId = `cat_${crypto.randomUUID().substring(0, 8)}`
       return c.env.DB.prepare(`
@@ -51,25 +49,29 @@ medanpediaRouter.post('/sync-services', async (c) => {
       }
     }
 
-    // Ambil Kamus Kategori (Map) untuk mencocokkan Nama dengan ID Kategori
-    const categoriesDB = await c.env.DB.prepare('SELECT id, name FROM categories').all()
-    const categoryMap = new Map()
-    categoriesDB.results?.forEach((row: any) => {
-      categoryMap.set(row.name, row.id)
-    })
+    // 4. Ambil Data Kategori & Layanan Lokal untuk Pencocokan Memori (Hanya Read = Sangat Murah)
+    const [categoriesDB, localServicesDB] = await c.env.DB.batch([
+      c.env.DB.prepare('SELECT id, name FROM categories'),
+      c.env.DB.prepare('SELECT id, rate, margin, name, min_order, max_order, is_refill, is_cancel, is_dripfeed, status FROM services WHERE provider_slug = "medanpedia"')
+    ])
 
-    // AMBIL SETTING MARKUP DARI KV
+    const categoryMap = new Map()
+    categoriesDB.results?.forEach((row: any) => categoryMap.set(row.name, row.id))
+
+    // Map layanan lokal untuk Diffing / Perbandingan data
+    const localServices = new Map()
+    localServicesDB.results?.forEach((row: any) => localServices.set(row.id, row))
+
+    // 5. Ambil Setting Markup Profit dari KV (1x Read saja)
     let markupPercent = 0;
     try {
       const kvConfigRaw = await c.env.CONFIG_KV.get('FRONTEND_SETTINGS');
       if (kvConfigRaw) {
         markupPercent = JSON.parse(kvConfigRaw).profitMarginPercent || 0;
       }
-    } catch (e) {
-      // Jika KV gagal/kosong, margin default adalah 0
-    }
+    } catch (e) {}
 
-    // Siapkan Kueri Utama untuk Produk
+    // 6. Siapkan Query UPSERT
     const stmt = c.env.DB.prepare(`
       INSERT INTO services (
         id, category_id, provider_slug, product_provider_id, name, type, 
@@ -89,38 +91,63 @@ medanpediaRouter.post('/sync-services', async (c) => {
         status = 'active'
     `)
 
-    // Rangkai Data dan Hitung Keuntungan
-    const batchStmts = services.map((item: any) => {
+    // 7. Proses In-Memory Diffing: Tentukan mana yang perlu di-Write ke D1
+    const batchStmts: any[] = []
+    let skippedCount = 0
+
+    services.forEach((item: any) => {
       const localId = `md_${item.service}` 
       const catId = categoryMap.get(item.category)
       
-      // RUMUS MARKUP PROFIT
       const baseRate = parseFloat(item.rate)
       const calculatedMargin = baseRate * (markupPercent / 100)
       
-      return stmt.bind(
-        localId, 
-        catId, 
-        String(item.service),
-        item.name, 
-        item.type, 
-        baseRate, 
-        calculatedMargin, 
-        parseInt(item.min), 
-        parseInt(item.max),
-        item.refill ? 1 : 0,    // ?10: Konversi boolean ke 1/0
-        item.cancel ? 1 : 0,    // ?11: Konversi boolean ke 1/0
-        item.dripfeed ? 1 : 0   // ?12: Konversi boolean ke 1/0
-      )
+      const minOrder = parseInt(item.min)
+      const maxOrder = parseInt(item.max)
+      const isRefill = item.refill ? 1 : 0
+      const isCancel = item.cancel ? 1 : 0
+      const isDripfeed = item.dripfeed ? 1 : 0
+
+      // PROTEKSI KUOTA D1 WRITE: Cek apakah data benar-benar berubah?
+      const existing = localServices.get(localId)
+      if (existing) {
+        if (
+          existing.rate === baseRate &&
+          existing.margin === calculatedMargin &&
+          existing.name === item.name &&
+          existing.min_order === minOrder &&
+          existing.max_order === maxOrder &&
+          existing.is_refill === isRefill &&
+          existing.is_cancel === isCancel &&
+          existing.is_dripfeed === isDripfeed &&
+          existing.status === 'active'
+        ) {
+          skippedCount++
+          return // Lewati layanan ini, jangan buat query D1 Write!
+        }
+      }
+      
+      // Jika harga/nama berubah atau produk baru, tambahkan ke kueri Batch
+      batchStmts.push(stmt.bind(
+        localId, catId, String(item.service), item.name, item.type, 
+        baseRate, calculatedMargin, minOrder, maxOrder,
+        isRefill, isCancel, isDripfeed
+      ))
     })
 
-    // Eksekusi Batch dengan Chunking (Pecah per 100 data agar D1 tidak error)
-    const chunkSize = 100
-    for (let i = 0; i < batchStmts.length; i += chunkSize) {
-      await c.env.DB.batch(batchStmts.slice(i, i + chunkSize))
+    // 8. Eksekusi Tulis (Write) HANYA untuk data yang berubah
+    if (batchStmts.length > 0) {
+      const chunkSize = 100
+      for (let i = 0; i < batchStmts.length; i += chunkSize) {
+        await c.env.DB.batch(batchStmts.slice(i, i + chunkSize))
+      }
     }
 
-    return c.json({ success: true, message: `${batchStmts.length} layanan berhasil disinkronkan ke dalam database dengan markup ${markupPercent}%.` })
+    return c.json({ 
+      success: true, 
+      message: `Tersinkron: ${batchStmts.length} layanan baru/diperbarui. Menghemat Kuota: ${skippedCount} layanan diabaikan karena tidak ada perubahan.` 
+    })
+    
   } catch (error: any) {
     return c.json({ error: 'Terjadi kesalahan sistem internal: ' + error.message }, 500)
   }
