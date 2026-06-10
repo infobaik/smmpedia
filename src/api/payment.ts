@@ -47,16 +47,15 @@ paymentRouter.post('/deposit', async (c) => {
   const apiUrl = String(gateway.api_url).trim().replace(/\/+$/, '')
   const deposit_id = 'DEP-' + crypto.randomUUID().substring(0, 8).toUpperCase()
   
-  // Mendapatkan domain URL saat ini secara dinamis (misal: https://smmpedia.pages.dev)
+  // Deteksi domain secara otomatis
   const currentDomain = new URL(c.req.url).origin
 
-  // PAYLOAD FINAL SESUAI INSTRUKSI GATEWAY ANDA
   const payload = {
     order_id: deposit_id, 
     amount: amount,
-    webhook_url: `${currentDomain}/api/payment/webhook`, // Otomatis ke webhook kita
-    redirect_url: `${currentDomain}/wallet`, // Kembali ke halaman dompet
-    link_name: '', // Dikosongkan seperti instruksi Anda
+    webhook_url: `${currentDomain}/api/payment/webhook`,
+    redirect_url: `${currentDomain}/wallet`,
+    link_name: '',
     customer: {
       name: user.name ? String(user.name).trim() : '',
       wa: user.whatsapp ? String(user.whatsapp).trim() : '',
@@ -84,10 +83,8 @@ paymentRouter.post('/deposit', async (c) => {
       return c.json({ error: 'Gateway merespons dengan format non-JSON.', details: textResult }, 502)
     }
 
-    // Mengecek status success dan menangkap raw_qris & paylink
     if (response.ok && result.status === 'success') {
-      
-      const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(result.raw_qris)}`
+      const qrUrl = result.raw_qris ? `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(result.raw_qris)}` : '';
 
       await c.env.DB.prepare(`
         INSERT INTO deposits (id, user_id, amount, status, payment_link)
@@ -97,9 +94,10 @@ paymentRouter.post('/deposit', async (c) => {
       return c.json({ 
         success: true, 
         deposit_id, 
+        payment_url: result.paylink, // <- Proteksi mutlak agar tidak bernilai undefined
         paylink: result.paylink,
         qr_url: qrUrl,
-        raw_qris: result.raw_qris
+        raw_qris: result.raw_qris || ''
       })
     }
     
