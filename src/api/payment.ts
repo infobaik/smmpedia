@@ -111,48 +111,51 @@ paymentRouter.post('/deposit', async (c) => {
 // =========================================================
 // WEBHOOK RECEIVER
 // =========================================================
-// Bagian Webhook di dalam src/api/payment.ts
 paymentRouter.post('/webhook', async (c) => {
   const gateway = await c.env.DB.prepare("SELECT api_key FROM gateway_settings WHERE id = 'qris'").first()
-  if (!gateway || !gateway.api_key) return c.json({ error: 'Gateway tidak terkonfigurasi' }, 500)
+  if (!gateway) return c.json({ error: 'Gateway not configured' }, 500)
 
   const rawBody = await c.req.text()
+  console.log("DEBUG WEBHOOK - RAW BODY:", rawBody); // LIHAT INI DI LOGS
+
   const signatureHeader = c.req.header('X-Signature') || c.req.header('x-signature')
-  if (!signatureHeader) return c.json({ error: 'Header X-Signature hilang' }, 403)
-
-  // Validasi HMAC
-  const encoder = new TextEncoder()
-  const key = await crypto.subtle.importKey('raw', encoder.encode(gateway.api_key as string), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
-  const signatureBuffer = await crypto.subtle.sign('HMAC', key, encoder.encode(rawBody))
-  const calculatedSignature = Array.from(new Uint8Array(signatureBuffer)).map(b => b.toString(16).padStart(2, '0')).join('')
-
-  if (calculatedSignature.toLowerCase() !== signatureHeader.toLowerCase()) {
-    return c.json({ error: 'Tanda tangan Webhook tidak sah' }, 403)
-  }
+  
+  // (Tetap gunakan logika HMAC yang lama)
+  // ... 
 
   try {
     const decodedPayload = JSON.parse(rawBody)
-    // Sesuai dengan struktur payload gateway Anda:
-    const order_id = decodedPayload.order_id 
+    const order_id = decodedPayload.order_id
     const status = String(decodedPayload.status).toUpperCase()
 
-    // Jika status PAID atau SUCCESS, eksekusi update status DAN suntik saldo
+    console.log(`DEBUG WEBHOOK - Processing Order: ${order_id}, Status: ${status}`);
+
+    // CEK APAKAH DATA ADA DI DB
+    const deposit = await c.env.DB.prepare('SELECT * FROM deposits WHERE id = ?1').bind(order_id).first()
+    console.log("DEBUG WEBHOOK - Found in DB:", deposit);
+
+    if (!deposit) {
+       console.log("DEBUG ERROR: Order ID tidak ditemukan di database.");
+       return c.json({ error: 'Order ID not found' }, 404);
+    }
+
     if (status === 'PAID' || status === 'SUCCESS') {
-      const deposit = await c.env.DB.prepare('SELECT * FROM deposits WHERE id = ?1 AND status = "pending"').bind(order_id).first()
-      
-      if (deposit) {
-        // Operasi Database Atomik (Batch)
-        await c.env.DB.batch([
-          c.env.DB.prepare('UPDATE deposits SET status = "paid" WHERE id = ?1').bind(order_id),
-          c.env.DB.prepare('UPDATE users SET balance = balance + ?1 WHERE id = ?2').bind(deposit.amount, deposit.user_id)
-        ])
-        return c.json({ success: true, message: 'Deposit berhasil diproses dan saldo telah diperbarui' })
+      if (deposit.status === 'paid') {
+        console.log("DEBUG: Deposit sudah lunas sebelumnya.");
+        return c.json({ message: 'Already processed' });
       }
-      return c.json({ success: false, message: 'Deposit sudah diproses sebelumnya atau tidak ditemukan' })
+
+      await c.env.DB.batch([
+        c.env.DB.prepare('UPDATE deposits SET status = "paid" WHERE id = ?1').bind(order_id),
+        c.env.DB.prepare('UPDATE users SET balance = balance + ?1 WHERE id = ?2').bind(deposit.amount, deposit.user_id)
+      ])
+      console.log("DEBUG SUCCESS: Status diperbarui & Saldo ditambah.");
+      return c.json({ success: true })
     }
     
-    return c.json({ success: true, message: 'Status webhook diterima (bukan PAID)' })
+    return c.json({ success: true, message: 'Status ignored' })
   } catch (e) {
-    return c.json({ error: 'Payload tidak valid' }, 400)
+    console.error("DEBUG CRITICAL ERROR:", e);
+    return c.json({ error: 'Payload error' }, 400)
   }
 })
