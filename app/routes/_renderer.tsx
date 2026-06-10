@@ -1,3 +1,4 @@
+// app/routes/_renderer.tsx
 import { jsxRenderer } from 'hono/jsx-renderer'
 
 export default jsxRenderer(({ children, title }) => {
@@ -7,7 +8,7 @@ export default jsxRenderer(({ children, title }) => {
         <meta charset="utf-8" />
         {/* TAG INI YANG MEMBUAT TAMPILAN MOBILE BEKERJA */}
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-        <title>{title ? `${title} - SMM Panel Pro` : 'SMM Panel Pro'}</title>
+        <title>{title ? `${title} - SMMPedia` : 'SMMPedia'}</title>
         
         {/* Tailwind & Icons */}
         <script src="https://cdn.tailwindcss.com"></script>
