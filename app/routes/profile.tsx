@@ -1,12 +1,11 @@
 import { createRoute } from 'honox/factory'
 import MemberLayout from '../components/MemberLayout'
 
-export default createRoute(async (c) => {
+const routeHandler = async (c: any) => {
   const sessionUser = c.get('user')
   let message = null
   let isSuccess = false
 
-  // Tangani pembaruan profil
   if (c.req.method === 'POST') {
     const body = await c.req.parseBody()
     const name = String(body.name).trim()
@@ -23,7 +22,6 @@ export default createRoute(async (c) => {
     }
   }
 
-  // Ambil data terbaru dari database
   const user = await c.env.DB.prepare('SELECT id, name, whatsapp, email, role FROM users WHERE id = ?1')
     .bind(sessionUser.userId)
     .first()
@@ -64,4 +62,7 @@ export default createRoute(async (c) => {
     </MemberLayout>,
     { title: 'Profil' }
   )
-})
+}
+
+export const POST = createRoute(routeHandler)
+export default createRoute(routeHandler)
