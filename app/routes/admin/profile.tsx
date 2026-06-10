@@ -1,7 +1,7 @@
 import { createRoute } from 'honox/factory'
 import AdminLayout from '../../components/AdminLayout'
 
-export default createRoute(async (c) => {
+const routeHandler = async (c: any) => {
   const sessionUser = c.get('user')
   let message = null
   let isSuccess = false
@@ -16,7 +16,6 @@ export default createRoute(async (c) => {
     } else if (newPassword.length < 6) {
       message = "Kata sandi minimal 6 karakter."
     } else {
-      // Hash password baru
       const msgBuffer = new TextEncoder().encode(newPassword)
       const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer)
       const hashArray = Array.from(new Uint8Array(hashBuffer))
@@ -74,4 +73,7 @@ export default createRoute(async (c) => {
     </AdminLayout>,
     { title: 'Profil Admin' }
   )
-})
+}
+
+export const POST = createRoute(routeHandler)
+export default createRoute(routeHandler)
