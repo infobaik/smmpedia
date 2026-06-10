@@ -1,3 +1,4 @@
+// src/api/orders.ts
 import { Hono } from 'hono'
 import { fetchMedanpedia } from './medanpedia'
 import type { Bindings } from '../index'
@@ -41,6 +42,13 @@ ordersRouter.post('/create', async (c) => {
     `).bind(charge, userId).run()
 
     if (deductResult.meta.changes === 0) return c.json({ error: 'Saldo tidak mencukupi untuk pesanan ini' }, 400)
+
+    // STATE AWAL SAGA: Catat pesanan processing SEBELUM memanggil API
+    const localOrderId = crypto.randomUUID()
+    await c.env.DB.prepare(`
+      INSERT INTO orders (id, user_id, service_id, provider_order_id, link, quantity, charge, status)
+      VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, 'processing')
+    `).bind(localOrderId, userId, localServiceId, link, quantity, charge).run()
 
     let providerOrderIdStr = null;
     let isNetworkError = false;
@@ -116,30 +124,26 @@ ordersRouter.post('/create', async (c) => {
     }
 
     // ==========================================
-    // FINALISASI HASIL
+    // KOMPENSASI SAGA (FINALISASI HASIL)
     // ==========================================
     if (isNetworkError) {
-      const localOrderId = crypto.randomUUID()
-      await c.env.DB.prepare(`
-        INSERT INTO orders (id, user_id, service_id, provider_order_id, link, quantity, charge, status)
-        VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, 'manual_reconciliation')
-      `).bind(localOrderId, userId, localServiceId, link, quantity, charge).run()
-
+      await c.env.DB.prepare(`UPDATE orders SET status = 'manual_reconciliation' WHERE id = ?1`).bind(localOrderId).run()
       return c.json({ success: true, orderId: localOrderId, message: 'Pesanan diterima (API Gangguan, masuk antrean manual).' })
     }
 
     if (providerErrorMessage) {
-      // Refund instan jika Provider Pusat menolak
-      await c.env.DB.prepare(`UPDATE users SET balance = balance + ?1 WHERE id = ?2`).bind(charge, userId).run()
+      // ROLLBACK: Refund instan jika Provider Pusat menolak, dan batalkan pesanan
+      await c.env.DB.batch([
+        c.env.DB.prepare(`UPDATE users SET balance = balance + ?1 WHERE id = ?2`).bind(charge, userId),
+        c.env.DB.prepare(`UPDATE orders SET status = 'canceled' WHERE id = ?1`).bind(localOrderId)
+      ])
       return c.json({ error: `Gagal diproses pusat: ${providerErrorMessage}. Saldo dikembalikan.` }, 400)
     }
 
     // Berhasil diteruskan ke pusat
-    const localOrderId = crypto.randomUUID()
     await c.env.DB.prepare(`
-      INSERT INTO orders (id, user_id, service_id, provider_order_id, link, quantity, charge, status)
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending')
-    `).bind(localOrderId, userId, localServiceId, providerOrderIdStr, link, quantity, charge).run()
+      UPDATE orders SET status = 'pending', provider_order_id = ?1 WHERE id = ?2
+    `).bind(providerOrderIdStr, localOrderId).run()
 
     return c.json({ success: true, orderId: localOrderId, message: 'Pesanan berhasil dikirim ke server pusat.' })
 
