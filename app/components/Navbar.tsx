@@ -34,7 +34,7 @@ const Navbar: FC = () => {
             </button>
 
             <button 
-              onclick="localStorage.removeItem('user_token'); window.location.href = '/login';"
+              onclick="localStorage.removeItem('user_token'); localStorage.removeItem('user_id'); document.cookie = 'user_token=; Max-Age=0; path=/'; window.location.href = '/login';"
               class="p-2 rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 focus:outline-none transition-colors cursor-pointer"
               title="Keluar dari Dasbor"
             >
