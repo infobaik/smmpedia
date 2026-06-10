@@ -1,0 +1,21 @@
+# wrangler.toml
+name = "smm-panel-honox"
+pages_build_output_dir = "dist"
+compatibility_date = "2024-04-05"
+
+[[kv_namespaces]]
+binding = "CONFIG_KV"
+id = "GANTI_DENGAN_KV_ID_ANDA_SAAT_DEPLOY"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "smm_panel_db"
+database_id = "GANTI_DENGAN_D1_ID_ANDA_SAAT_DEPLOY"
+
+[vars]
+JWT_SECRET = "RAHASIA_JWT_GANTI_DI_PRODUCTION"
+CRON_SECRET = "RAHASIA_CRON_GANTI_DI_PRODUCTION"
+MEDANPEDIA_API_KEY = "API_KEY_MEDANPEDIA_ANDA"
+CLOUDINARY_CLOUD_NAME = "CLOUD_NAME_ANDA"
+CLOUDINARY_API_KEY = "API_KEY_CLOUDINARY_ANDA"
+CLOUDINARY_SECRET = "API_SECRET_CLOUDINARY_ANDA"
