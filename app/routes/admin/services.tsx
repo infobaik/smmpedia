@@ -1,7 +1,7 @@
 import { createRoute } from 'honox/factory'
 import AdminLayout from '../../components/AdminLayout'
 
-export default createRoute(async (c) => {
+const routeHandler = async (c: any) => {
   let message = null
   let isSuccess = false
 
@@ -27,7 +27,6 @@ export default createRoute(async (c) => {
     }
   }
 
-  // Mengambil data master untuk dropdown
   const [categoriesData, providersData, servicesData] = await c.env.DB.batch([
     c.env.DB.prepare('SELECT id, name FROM categories ORDER BY name ASC'),
     c.env.DB.prepare('SELECT slug, name FROM providers WHERE status = "active" ORDER BY name ASC'),
@@ -50,17 +49,15 @@ export default createRoute(async (c) => {
         <h1 class="text-2xl font-bold mb-6">Katalog Produk & Layanan</h1>
 
         {message && (
-          <div class={`p-4 rounded-lg text-sm mb-6 ${isSuccess ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+          <div class={`p-4 rounded-lg text-sm mb-6 font-medium ${isSuccess ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
             {message}
           </div>
         )}
 
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* FORM TAMBAH PRODUK */}
           <div class="bg-white dark:bg-gray-800 p-6 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm h-fit">
             <h2 class="text-lg font-bold mb-4 border-b border-gray-100 dark:border-gray-700 pb-2">Tambah Produk Baru</h2>
             <form method="POST" class="space-y-4">
-              
               <div>
                 <label class="block text-xs font-bold mb-1 uppercase text-gray-500">Master Kategori</label>
                 <select name="category_id" required class="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-brand text-sm">
@@ -89,11 +86,11 @@ export default createRoute(async (c) => {
 
               <div class="grid grid-cols-2 gap-4">
                 <div>
-                  <label class="block text-xs font-bold mb-1 uppercase text-gray-500">Harga Pusat (1K)</label>
+                  <label class="block text-xs font-bold mb-1 uppercase text-gray-500">Harga Pusat</label>
                   <input type="number" step="0.01" name="rate" required class="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-brand text-sm" />
                 </div>
                 <div>
-                  <label class="block text-xs font-bold mb-1 uppercase text-gray-500">Margin Profit (1K)</label>
+                  <label class="block text-xs font-bold mb-1 uppercase text-gray-500">Margin Profit</label>
                   <input type="number" step="0.01" name="margin" required class="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-brand text-sm" />
                 </div>
               </div>
@@ -115,7 +112,6 @@ export default createRoute(async (c) => {
             </form>
           </div>
 
-          {/* TABEL DAFTAR PRODUK */}
           <div class="lg:col-span-2 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
             <div class="overflow-x-auto">
               <table class="w-full text-sm text-left">
@@ -123,7 +119,7 @@ export default createRoute(async (c) => {
                   <tr>
                     <th class="px-6 py-3 font-semibold">Layanan & Kategori</th>
                     <th class="px-6 py-3 font-semibold">Provider API</th>
-                    <th class="px-6 py-3 font-semibold">Harga Jual (Pusat+Margin)</th>
+                    <th class="px-6 py-3 font-semibold">Harga Jual</th>
                     <th class="px-6 py-3 font-semibold text-center">Status</th>
                   </tr>
                 </thead>
@@ -159,4 +155,7 @@ export default createRoute(async (c) => {
     </AdminLayout>,
     { title: 'Master Produk' }
   )
-})
+}
+
+export const POST = createRoute(routeHandler)
+export default createRoute(routeHandler)
