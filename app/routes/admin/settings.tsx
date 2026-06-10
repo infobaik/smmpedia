@@ -1,7 +1,7 @@
 import { createRoute } from 'honox/factory'
 import AdminLayout from '../../components/AdminLayout'
 
-export default createRoute(async (c) => {
+const routeHandler = async (c: any) => {
   let message = null
   let isSuccess = false
 
@@ -28,14 +28,12 @@ export default createRoute(async (c) => {
     }
   }
 
-  // Get Frontend Settings
   let configFrontend = { siteName: 'SMM Panel Pro', primaryColor: '#2563eb', maintenanceMode: false }
   try {
     const kvConfigRaw = await c.env.CONFIG_KV.get('FRONTEND_SETTINGS')
     if (kvConfigRaw) configFrontend = JSON.parse(kvConfigRaw)
   } catch (e) {}
 
-  // Get Gateway Settings
   const gateway = await c.env.DB.prepare("SELECT * FROM gateway_settings WHERE id = 'qris'").first() || { api_url: '', api_key: '' }
 
   return c.render(
@@ -50,7 +48,6 @@ export default createRoute(async (c) => {
         )}
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
-          {/* Form Gateway (Database) */}
           <form method="POST" class="bg-white dark:bg-gray-800 p-6 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm h-fit">
             <input type="hidden" name="_action" value="gateway" />
             <h2 class="text-lg font-bold mb-4 border-b border-gray-100 dark:border-gray-700 pb-2 flex items-center">
@@ -64,13 +61,11 @@ export default createRoute(async (c) => {
               <div>
                 <label class="block text-sm font-semibold mb-1">API Key & Webhook Secret</label>
                 <input type="text" name="api_key" value={gateway.api_key as string} required class="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-brand font-mono text-sm" />
-                <p class="text-xs text-gray-500 mt-1">Kunci ini digunakan untuk Bearer Token sekaligus validasi Webhook (HMAC).</p>
               </div>
             </div>
             <button type="submit" class="w-full bg-slate-800 text-white font-semibold p-2.5 rounded-lg hover:bg-slate-700 transition mt-6">Simpan Gateway</button>
           </form>
 
-          {/* Form Frontend (KV) */}
           <form method="POST" class="bg-white dark:bg-gray-800 p-6 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm h-fit">
             <input type="hidden" name="_action" value="frontend" />
             <h2 class="text-lg font-bold mb-4 border-b border-gray-100 dark:border-gray-700 pb-2 flex items-center">
@@ -92,9 +87,11 @@ export default createRoute(async (c) => {
             <button type="submit" class="w-full bg-brand text-white font-semibold p-2.5 rounded-lg hover:opacity-90 transition mt-6">Simpan Frontend</button>
           </form>
         </div>
-
       </div>
     </AdminLayout>,
     { title: 'Pengaturan' }
   )
-})
+}
+
+export const POST = createRoute(routeHandler)
+export default createRoute(routeHandler)
