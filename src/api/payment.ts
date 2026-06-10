@@ -1,4 +1,3 @@
-// src/api/payment.ts
 import { Hono } from 'hono'
 import type { Bindings } from '../index'
 
@@ -11,18 +10,17 @@ paymentRouter.post('/deposit', async (c) => {
   const userSession = c.get('user')
   const { amount } = await c.req.json()
 
-  // Ambil profil lengkap dari DB
   const user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?1').bind(userSession.userId).first()
   if (!user || !user.name || !user.whatsapp) {
     return c.json({ error: 'Harap lengkapi Nama dan WhatsApp di profil sebelum melakukan deposit.' }, 400)
   }
 
-  // Ambil konfigurasi dari KV
-  const kvConfigRaw = await c.env.CONFIG_KV.get('GATEWAY_SETTINGS')
-  if (!kvConfigRaw) return c.json({ error: 'Gateway belum dikonfigurasi.' }, 500)
-  const config = JSON.parse(kvConfigRaw)
+  // Mengambil konfigurasi murni dari DATABASE (Bukan KV)
+  const gateway = await c.env.DB.prepare("SELECT api_url, api_key FROM gateway_settings WHERE id = 'qris'").first()
+  if (!gateway || !gateway.api_url || !gateway.api_key) {
+    return c.json({ error: 'Sistem Payment Gateway belum dikonfigurasi oleh Admin.' }, 500)
+  }
 
-  // Buat deposit_id unik
   const deposit_id = 'DEP-' + crypto.randomUUID().substring(0, 8).toUpperCase()
   
   const payload = {
@@ -37,10 +35,10 @@ paymentRouter.post('/deposit', async (c) => {
   }
 
   try {
-    const response = await fetch(`${config.qrisApiUrl}/trx`, {
+    const response = await fetch(`${gateway.api_url}/trx`, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${config.qrisApiKey}`,
+        'Authorization': `Bearer ${gateway.api_key}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(payload)
@@ -58,29 +56,26 @@ paymentRouter.post('/deposit', async (c) => {
     }
     return c.json({ error: 'Gateway menolak transaksi.', details: result }, 400)
   } catch (error) {
-    return c.json({ error: 'Gagal menghubungi gateway.' }, 500)
+    return c.json({ error: 'Gagal menghubungi server gateway.' }, 500)
   }
 })
 
 // =========================================================
-// WEBHOOK RECEIVER (VALIDASI HMAC SHA-256)
+// WEBHOOK RECEIVER (VALIDASI HMAC DENGAN API KEY)
 // =========================================================
 paymentRouter.post('/webhook', async (c) => {
-  // 1. Ambil config
-  const kvConfigRaw = await c.env.CONFIG_KV.get('GATEWAY_SETTINGS')
-  if (!kvConfigRaw) return c.json({ error: 'Not configured' }, 500)
-  const config = JSON.parse(kvConfigRaw)
+  const gateway = await c.env.DB.prepare("SELECT api_key FROM gateway_settings WHERE id = 'qris'").first()
+  if (!gateway || !gateway.api_key) return c.json({ error: 'Not configured' }, 500)
 
-  // 2. Ambil raw body dan signature
   const rawBody = await c.req.text()
   const signatureHeader = c.req.header('X-Signature')
   if (!signatureHeader) return c.json({ error: 'Missing Signature' }, 403)
 
-  // 3. Validasi HMAC SHA-256
+  // Validasi HMAC SHA-256 menggunakan API KEY yang SAMA
   const encoder = new TextEncoder()
   const key = await crypto.subtle.importKey(
     'raw',
-    encoder.encode(config.qrisWebhookSecret),
+    encoder.encode(gateway.api_key as string),
     { name: 'HMAC', hash: 'SHA-256' },
     false,
     ['sign']
@@ -91,19 +86,17 @@ paymentRouter.post('/webhook', async (c) => {
     .map(b => b.toString(16).padStart(2, '0')).join('')
 
   if (calculatedSignature !== signatureHeader) {
-    return c.json({ error: 'Invalid Signature' }, 403)
+    return c.json({ error: 'Invalid Webhook Signature' }, 403)
   }
 
-  // 4. Proses Payload
   try {
     const decodedPayload = JSON.parse(rawBody)
-    const { order_id, status } = decodedPayload // order_id dari gateway adalah deposit_id kita
+    const { order_id, status } = decodedPayload 
 
     if (status === 'PAID') {
       const deposit = await c.env.DB.prepare('SELECT * FROM deposits WHERE id = ?1 AND status = "pending"').bind(order_id).first()
       
       if (deposit) {
-        // Eksekusi atomik: Update status deposit DAN tambah saldo user
         await c.env.DB.batch([
           c.env.DB.prepare('UPDATE deposits SET status = "paid" WHERE id = ?1').bind(order_id),
           c.env.DB.prepare('UPDATE users SET balance = balance + ?1 WHERE id = ?2').bind(deposit.amount, deposit.user_id)
