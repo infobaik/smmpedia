@@ -22,7 +22,8 @@ const routeHandler = async (c: any) => {
               <h2 class="text-3xl font-bold">Rp {balance.toLocaleString('id-ID')}</h2>
             </div>
 
-            <div class="bg-white dark:bg-gray-800 p-6 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm">
+            {/* Container Form Deposit yang akan BERUBAH menjadi QRIS saat sukses */}
+            <div id="depositFormContainer" class="bg-white dark:bg-gray-800 p-6 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm transition-all duration-300">
               <h2 class="text-lg font-bold mb-4 border-b border-gray-100 dark:border-gray-700 pb-2">Top Up Otomatis (QRIS)</h2>
               <form id="depositForm" class="space-y-4">
                 <div id="depositAlert" class="hidden p-3 rounded-lg text-sm font-medium"></div>
@@ -37,9 +38,9 @@ const routeHandler = async (c: any) => {
             </div>
           </div>
 
-          <div class="lg:col-span-2 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
+          <div class="lg:col-span-2 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden h-fit">
             <div class="p-4 border-b border-gray-200 dark:border-gray-700">
-              <h2 class="text-lg font-bold">Riwayat Deposit (Invoice)</h2>
+              <h2 class="text-lg font-bold">Riwayat Deposit</h2>
             </div>
             <div class="overflow-x-auto">
               <table class="w-full text-sm text-left">
@@ -54,12 +55,12 @@ const routeHandler = async (c: any) => {
                 <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
                   {deposits.map((d: any) => (
                     <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                      <td class="px-6 py-4 font-mono text-xs">{d.id}</td>
+                      <td class="px-6 py-4 font-mono text-xs text-gray-500">{d.id}</td>
                       <td class="px-6 py-4 font-bold text-gray-900 dark:text-white">Rp {d.amount.toLocaleString('id-ID')}</td>
                       <td class="px-6 py-4">
                         {d.status === 'pending' ? (
                           <a href={d.payment_link} target="_blank" class="px-3 py-1 bg-yellow-100 hover:bg-yellow-200 text-yellow-800 text-xs font-bold rounded-full transition flex items-center w-fit">
-                            Bayar Sekarang <i data-lucide="external-link" class="w-3 h-3 ml-1"></i>
+                            Bayar <i data-lucide="external-link" class="w-3 h-3 ml-1"></i>
                           </a>
                         ) : d.status === 'paid' ? (
                           <span class="px-3 py-1 bg-green-100 text-green-700 text-xs font-bold rounded-full">LUNAS</span>
@@ -110,23 +111,56 @@ const routeHandler = async (c: any) => {
             const data = await response.json();
             
             if (data.success) {
-              window.location.href = data.payment_url;
+              // Jika sukses, ubah form menjadi gambar QRIS tanpa me-redirect!
+              if (data.qr_url && data.raw_qris) {
+                const container = document.getElementById('depositFormContainer');
+                container.innerHTML = \`
+                  <h2 class="text-lg font-bold mb-4 border-b border-gray-100 dark:border-gray-700 pb-2 text-center">Scan untuk Membayar</h2>
+                  <div class="flex flex-col items-center space-y-4">
+                    <div class="bg-green-100 text-green-700 px-4 py-2 rounded-lg text-sm font-bold w-full text-center">
+                      Tagihan Dibuat!
+                    </div>
+                    
+                    <div class="bg-white p-3 rounded-xl border border-gray-200 shadow-sm inline-block">
+                      <img src="\${data.qr_url}" alt="QRIS Code" class="w-[200px] h-[200px]" />
+                    </div>
+                    
+                    <div class="w-full bg-gray-50 dark:bg-gray-900 p-3 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+                      <p class="text-[10px] text-gray-500 font-mono break-all text-center leading-tight">\${data.raw_qris}</p>
+                    </div>
+                    
+                    <div class="w-full space-y-2 mt-2">
+                      <a href="\${data.paylink || data.payment_url}" target="_blank" class="w-full bg-blue-50 text-blue-600 font-bold p-2.5 rounded-lg hover:bg-blue-100 transition flex items-center justify-center text-sm">
+                        <i data-lucide="external-link" class="w-4 h-4 mr-2"></i> Buka Link Pay
+                      </a>
+                      <button onclick="window.location.reload()" class="w-full bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 font-bold p-2.5 rounded-lg transition hover:bg-gray-200 text-sm">
+                        Selesai / Refresh Dompet
+                      </button>
+                    </div>
+                  </div>
+                \`;
+                if (typeof lucide !== 'undefined') lucide.createIcons();
+              } else {
+                // Fallback jika API QR gagal
+                window.location.href = data.paylink || data.payment_url;
+              }
             } else {
-              // Menampilkan Response Error Asli dari Gateway
               let errorMsg = data.error || 'Terjadi kesalahan sistem.';
               if (data.gateway_response) {
-                errorMsg += '\\n\\nRespon Gateway: ' + JSON.stringify(data.gateway_response, null, 2);
+                errorMsg += '\\n\\nGateway: ' + JSON.stringify(data.gateway_response, null, 2);
               }
               alertBox.innerText = errorMsg;
-              alertBox.className = 'p-3 rounded-lg text-[11px] font-mono bg-red-100 text-red-700 mb-4 block whitespace-pre-wrap text-left';
+              alertBox.className = 'p-3 rounded-lg text-xs font-mono bg-red-100 text-red-700 mb-4 block whitespace-pre-wrap text-left overflow-x-auto';
+              btn.disabled = false;
+              btn.innerHTML = '<i data-lucide="qr-code" class="w-5 h-5 mr-2"></i> Buat Tagihan QRIS';
+              if (typeof lucide !== 'undefined') lucide.createIcons();
             }
           } catch (err) {
             alertBox.textContent = 'Gagal terhubung ke server.';
             alertBox.className = 'p-3 rounded-lg text-sm font-medium bg-red-100 text-red-700 mb-4 block';
-          } finally {
             btn.disabled = false;
             btn.innerHTML = '<i data-lucide="qr-code" class="w-5 h-5 mr-2"></i> Buat Tagihan QRIS';
-            lucide.createIcons();
+            if (typeof lucide !== 'undefined') lucide.createIcons();
           }
         });
       `}} />
