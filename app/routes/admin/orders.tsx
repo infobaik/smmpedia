@@ -1,10 +1,9 @@
 import { createRoute } from 'honox/factory'
 import AdminLayout from '../../components/AdminLayout'
 
-export default createRoute(async (c) => {
+const routeHandler = async (c: any) => {
   let message = null
 
-  // Logika Refund Manual
   if (c.req.method === 'POST') {
     const body = await c.req.parseBody()
     const orderId = String(body.order_id)
@@ -12,7 +11,6 @@ export default createRoute(async (c) => {
     const charge = parseFloat(String(body.charge))
 
     try {
-      // Refund: Ubah status jadi error, kembalikan saldo
       await c.env.DB.batch([
         c.env.DB.prepare('UPDATE orders SET status = "error_refunded" WHERE id = ?1 AND status != "error_refunded"').bind(orderId),
         c.env.DB.prepare('UPDATE users SET balance = balance + ?1 WHERE id = ?2').bind(charge, userId)
@@ -73,7 +71,6 @@ export default createRoute(async (c) => {
                       </span>
                     </td>
                     <td class="px-6 py-4 text-right">
-                      {/* Tombol Refund hanya aktif jika pesanan bukan sukses atau sudah direfund */}
                       {o.status !== 'completed' && o.status !== 'success' && o.status !== 'error_refunded' && (
                         <form method="POST" onsubmit="return confirm('Yakin ingin merefund pesanan ini dan mengembalikan saldo user?')">
                           <input type="hidden" name="order_id" value={o.id} />
@@ -95,4 +92,7 @@ export default createRoute(async (c) => {
     </AdminLayout>,
     { title: 'Transaksi' }
   )
-})
+}
+
+export const POST = createRoute(routeHandler)
+export default createRoute(routeHandler)
