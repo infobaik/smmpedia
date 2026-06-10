@@ -30,7 +30,7 @@ const routeHandler = async (c: any) => {
                 <div id="depositAlert" class="hidden p-3 rounded-lg text-sm font-medium"></div>
                 <div>
                   <label class="block text-sm font-semibold mb-1">Nominal Deposit (Rp)</label>
-                  <input type="number" id="depositAmount" min="10000" required placeholder="Min. 10000" class="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-brand font-bold" />
+                  <input type="number" id="depositAmount" min="1000" required placeholder="Min. 10000" class="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-brand font-bold" />
                 </div>
                 <button type="submit" id="submitDepositBtn" class="w-full bg-brand text-white font-bold p-3 rounded-lg hover:opacity-90 transition flex items-center justify-center">
                   <i data-lucide="qr-code" class="w-5 h-5 mr-2"></i> Buat Tagihan QRIS
