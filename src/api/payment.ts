@@ -10,7 +10,6 @@ export const paymentRouter = new Hono<{ Bindings: Bindings }>()
 // DEPOSIT TRIGGER (MENGIRIM DATA KE GATEWAY)
 // =========================================================
 paymentRouter.post('/deposit', async (c) => {
-  // 1. Ekstrak Token dari Cookie atau Header Authorization
   let token = getCookie(c, 'user_token')
   if (!token) {
     const authHeader = c.req.header('Authorization')
@@ -27,7 +26,6 @@ paymentRouter.post('/deposit', async (c) => {
     return c.json({ error: 'Sesi kedaluwarsa.' }, 401)
   }
 
-  // 2. Parse Nominal
   let amount = 0;
   try {
     const body = await c.req.json()
@@ -38,7 +36,6 @@ paymentRouter.post('/deposit', async (c) => {
 
   if (isNaN(amount) || amount < 10000) return c.json({ error: 'Nominal deposit minimal Rp 10.000.' }, 400)
 
-  // 3. Ambil data user & config Gateway
   const user = await c.env.DB.prepare('SELECT email, name, whatsapp FROM users WHERE id = ?1').bind(userId).first()
   if (!user) return c.json({ error: 'Pengguna tidak ditemukan.' }, 404)
 
@@ -47,15 +44,19 @@ paymentRouter.post('/deposit', async (c) => {
     return c.json({ error: 'Payment Gateway belum dikonfigurasi.' }, 500)
   }
 
-  // 4. Normalisasi URL
   const apiUrl = String(gateway.api_url).trim().replace(/\/+$/, '')
   const deposit_id = 'DEP-' + crypto.randomUUID().substring(0, 8).toUpperCase()
   
-  // 5. PAYLOAD: link_name wajib diisi, customer dibiarkan string kosong jika tidak ada
+  // Mendapatkan domain URL saat ini secara dinamis (misal: https://smmpedia.pages.dev)
+  const currentDomain = new URL(c.req.url).origin
+
+  // PAYLOAD FINAL SESUAI INSTRUKSI GATEWAY ANDA
   const payload = {
     order_id: deposit_id, 
     amount: amount,
-    link_name: 'Deposit Saldo', // Jangan string kosong '', sering memicu Error 400 di Gateway
+    webhook_url: `${currentDomain}/api/payment/webhook`, // Otomatis ke webhook kita
+    redirect_url: `${currentDomain}/wallet`, // Kembali ke halaman dompet
+    link_name: '', // Dikosongkan seperti instruksi Anda
     customer: {
       name: user.name ? String(user.name).trim() : '',
       wa: user.whatsapp ? String(user.whatsapp).trim() : '',
@@ -63,7 +64,6 @@ paymentRouter.post('/deposit', async (c) => {
     }
   }
 
-  // 6. Request ke Gateway
   try {
     const response = await fetch(`${apiUrl}/trx`, {
       method: 'POST',
@@ -84,21 +84,26 @@ paymentRouter.post('/deposit', async (c) => {
       return c.json({ error: 'Gateway merespons dengan format non-JSON.', details: textResult }, 502)
     }
 
-    if (response.ok && result.payment_url) {
+    // Mengecek status success dan menangkap raw_qris & paylink
+    if (response.ok && result.status === 'success') {
+      
+      const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(result.raw_qris)}`
+
       await c.env.DB.prepare(`
         INSERT INTO deposits (id, user_id, amount, status, payment_link)
         VALUES (?1, ?2, ?3, 'pending', ?4)
-      `).bind(deposit_id, userId, amount, result.payment_url).run()
+      `).bind(deposit_id, userId, amount, result.paylink).run()
 
-      return c.json({ success: true, deposit_id, payment_url: result.payment_url })
+      return c.json({ 
+        success: true, 
+        deposit_id, 
+        paylink: result.paylink,
+        qr_url: qrUrl,
+        raw_qris: result.raw_qris
+      })
     }
     
-    // Meneruskan error ASLI dari gateway agar bisa dibaca di frontend
-    return c.json({ 
-      error: 'Gateway menolak payload (Bad Request).', 
-      gateway_response: result,
-      payload_sent: payload 
-    }, 400)
+    return c.json({ error: 'Gateway menolak payload.', gateway_response: result, payload_sent: payload }, 400)
 
   } catch (error: any) {
     return c.json({ error: 'Gagal menghubungi server gateway.', details: error.message }, 500)
