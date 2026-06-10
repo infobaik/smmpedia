@@ -59,8 +59,11 @@ export default createRoute((c) => {
             const data = await response.json();
             
             if (data.success) {
+              // Simpan token di localStorage (untuk API) dan Cookie (untuk SSR Middleware)
               localStorage.setItem('user_token', data.token);
               localStorage.setItem('user_id', data.user.id);
+              document.cookie = 'user_token=' + data.token + '; path=/; max-age=604800; SameSite=Lax';
+              
               window.location.href = '/dashboard';
             } else {
               alertBox.textContent = data.error || 'Gagal masuk. Periksa kredensial Anda.';
