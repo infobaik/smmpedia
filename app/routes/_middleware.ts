@@ -7,7 +7,9 @@ export default createRoute(async (c, next) => {
   
   // Rute Publik & Webhook Gateway yang diizinkan lewat
   const publicRoutes = ['/', '/login', '/register', '/api/auth/login', '/api/payment/webhook']
-  if (publicRoutes.includes(path)) return next()
+  if (publicRoutes.includes(path) || path.startsWith('/api/v1')) {
+    return next()
+  }
 
   const token = getCookie(c, 'user_token')
   if (!token) {
