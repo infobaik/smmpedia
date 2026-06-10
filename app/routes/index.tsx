@@ -1,7 +1,7 @@
 // app/routes/index.tsx
 import { createRoute } from 'honox/factory'
 import { cache } from 'hono/cache'
-import Navbar from '../components/Navbar'
+import NavbarFrontend from '../components/NavbarFrontend'
 
 export default createRoute(
   cache({
@@ -25,8 +25,8 @@ export default createRoute(
 
     return c.render(
       <div class="min-h-screen flex flex-col">
-        {/* FIX: Mengunci status isLoggedIn ke false khusus di halaman terluar (Frontpage) */}
-        <Navbar showBalance={false} isLoggedIn={false} />
+        {/* MENGGUNAKAN NAVBAR KHUSUS FRONTEND YANG ISOLATIF */}
+        <NavbarFrontend />
         
         <main class="flex-grow flex items-center justify-center bg-white dark:bg-gray-900 transition-colors duration-200">
           <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20 text-center">
