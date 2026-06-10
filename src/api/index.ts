@@ -7,6 +7,7 @@ import { ordersRouter } from './orders'
 import { cronRouter } from './cron'
 import { webhookRouter } from './webhook'
 import { checkRouter } from './check'
+import { paymentRouter } from './payment'
 
 export const apiRouter = new Hono()
 
@@ -17,3 +18,4 @@ apiRouter.route('/orders', ordersRouter)
 apiRouter.route('/cron', cronRouter)
 apiRouter.route('/webhook', webhookRouter)
 apiRouter.route('/check', checkRouter)
+apiRouter.route('/payment', paymentRouter)
