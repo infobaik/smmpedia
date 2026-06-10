@@ -30,7 +30,7 @@ authRouter.post('/register', async (c) => {
 
     return c.json({ success: true, message: 'Registrasi berhasil' })
   } catch (error) {
-    return c.json({ error: 'Email sudah terdaftar' }, 400)
+    return c.json({ error: 'Email sudah terdaftar atau terjadi kesalahan' }, 400)
   }
 })
 
@@ -58,7 +58,8 @@ authRouter.post('/login', async (c) => {
     exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7
   }
   
-  const token = await sign(payload, c.env.JWT_SECRET)
+  // Perbaikan: Penulisan algoritma secara eksplisit sesuai standar Hono JWT terbaru
+  const token = await sign(payload, c.env.JWT_SECRET, 'HS256')
 
   return c.json({
     success: true,
