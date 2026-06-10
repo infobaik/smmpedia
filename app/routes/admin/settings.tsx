@@ -1,3 +1,4 @@
+// app/routes/admin/settings.tsx
 import { createRoute } from 'honox/factory'
 import AdminLayout from '../../components/AdminLayout'
 
@@ -13,10 +14,11 @@ const routeHandler = async (c: any) => {
       const updatedSettings = {
         siteName: String(body.siteName).trim(),
         primaryColor: String(body.primaryColor).trim(),
-        maintenanceMode: body.maintenanceMode === 'true'
+        maintenanceMode: body.maintenanceMode === 'true',
+        profitMarginPercent: parseFloat(String(body.profitMarginPercent)) || 0
       }
       await c.env.CONFIG_KV.put('FRONTEND_SETTINGS', JSON.stringify(updatedSettings))
-      message = "Pengaturan Frontend berhasil disimpan ke KV."
+      message = "Pengaturan Frontend dan Markup berhasil disimpan ke KV."
       isSuccess = true
     } 
     else if (actionType === 'gateway') {
@@ -28,7 +30,7 @@ const routeHandler = async (c: any) => {
     }
   }
 
-  let configFrontend = { siteName: 'SMM Panel Pro', primaryColor: '#2563eb', maintenanceMode: false }
+  let configFrontend = { siteName: 'SMM Panel Pro', primaryColor: '#2563eb', maintenanceMode: false, profitMarginPercent: 0 }
   try {
     const kvConfigRaw = await c.env.CONFIG_KV.get('FRONTEND_SETTINGS')
     if (kvConfigRaw) configFrontend = JSON.parse(kvConfigRaw)
@@ -82,6 +84,14 @@ const routeHandler = async (c: any) => {
                   <option value="false" selected={!configFrontend.maintenanceMode}>Aktif Berjalan</option>
                   <option value="true" selected={configFrontend.maintenanceMode}>Mode Perbaikan</option>
                 </select>
+              </div>
+              <div>
+                <label class="block text-sm font-semibold mb-1">Global Profit Markup (%)</label>
+                <div class="relative">
+                  <input type="number" step="0.1" name="profitMarginPercent" value={configFrontend.profitMarginPercent || 0} required class="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg p-2.5 pr-8 outline-none focus:ring-2 focus:ring-brand" />
+                  <span class="absolute right-3 top-2.5 font-bold text-gray-400">%</span>
+                </div>
+                <p class="text-xs text-gray-500 mt-1">Keuntungan otomatis yang ditambahkan ke harga modal saat sinkronisasi API.</p>
               </div>
             </div>
             <button type="submit" class="w-full bg-brand text-white font-semibold p-2.5 rounded-lg hover:opacity-90 transition mt-6">Simpan Frontend</button>
