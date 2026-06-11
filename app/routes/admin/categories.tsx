@@ -6,6 +6,9 @@ const routeHandler = async (c: any) => {
   let message = null
   let isSuccess = false
 
+  // ==========================================
+  // LOGIKA CRUD (POST)
+  // ==========================================
   if (c.req.method === 'POST') {
     const body = await c.req.parseBody()
     const action = body._action
@@ -59,24 +62,37 @@ const routeHandler = async (c: any) => {
   }
 
   // ==========================================
-  // LOGIKA PAGINASI SERVER-SIDE
+  // LOGIKA PAGINASI & PENCARIAN (SERVER-SIDE)
   // ==========================================
   const url = new URL(c.req.url)
   const page = Math.max(1, parseInt(url.searchParams.get('page') || '1'))
   const limit = parseInt(url.searchParams.get('limit') || '10')
+  const searchQuery = url.searchParams.get('q') || ''
   const offset = (page - 1) * limit
 
-  // Hitung total seluruh data
-  const countData = await c.env.DB.prepare('SELECT COUNT(*) as total FROM categories').first()
-  const totalItems = countData?.total || 0
-  const totalPages = Math.ceil(totalItems / limit) || 1
+  let totalItems = 0;
+  let categories = [];
 
-  // Eksekusi data dengan batas paginasi
-  const categoriesData = await c.env.DB.prepare('SELECT * FROM categories ORDER BY name ASC LIMIT ?1 OFFSET ?2')
-    .bind(limit, offset)
-    .all()
-    
-  const categories = categoriesData.results || []
+  if (searchQuery) {
+    // Jika ada pencarian
+    const countData = await c.env.DB.prepare('SELECT COUNT(*) as total FROM categories WHERE name LIKE ?1 OR description LIKE ?1')
+      .bind(`%${searchQuery}%`).first()
+    totalItems = countData?.total || 0
+
+    const categoriesData = await c.env.DB.prepare('SELECT * FROM categories WHERE name LIKE ?1 OR description LIKE ?1 ORDER BY name ASC LIMIT ?2 OFFSET ?3')
+      .bind(`%${searchQuery}%`, limit, offset).all()
+    categories = categoriesData.results || []
+  } else {
+    // Jika tidak ada pencarian
+    const countData = await c.env.DB.prepare('SELECT COUNT(*) as total FROM categories').first()
+    totalItems = countData?.total || 0
+
+    const categoriesData = await c.env.DB.prepare('SELECT * FROM categories ORDER BY name ASC LIMIT ?1 OFFSET ?2')
+      .bind(limit, offset).all()
+    categories = categoriesData.results || []
+  }
+
+  const totalPages = Math.ceil(totalItems / limit) || 1
 
   // Indikator angka paginasi
   const showingStart = totalItems === 0 ? 0 : offset + 1
@@ -116,15 +132,17 @@ const routeHandler = async (c: any) => {
             </form>
           </div>
 
-          {/* Wrapper Tabel Data & Paginasi */}
+          {/* Wrapper Tabel Data, Pencarian & Paginasi */}
           <div class="lg:col-span-2 flex flex-col h-full">
             
-            {/* Header Kontrol Paginasi */}
-            <div class="bg-white dark:bg-gray-800 p-4 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm flex items-center justify-between mb-4">
+            {/* Header Kontrol: Paginasi & Pencarian */}
+            <div class="bg-white dark:bg-gray-800 p-4 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4">
+              
+              {/* Filter Limit */}
               <div class="text-sm text-gray-600 dark:text-gray-300 flex items-center">
                 Tampilkan
                 <select 
-                  onchange="window.location.href='?limit=' + this.value + '&page=1'" 
+                  onchange={`window.location.href='?limit=' + this.value + '&page=1&q=${encodeURIComponent(searchQuery)}'`} 
                   class="mx-2 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white rounded-lg p-1.5 focus:ring-brand focus:border-brand outline-none cursor-pointer"
                 >
                   <option value="10" selected={limit === 10}>10</option>
@@ -132,8 +150,33 @@ const routeHandler = async (c: any) => {
                   <option value="25" selected={limit === 25}>25</option>
                   <option value="50" selected={limit === 50}>50</option>
                 </select>
-                entri per halaman
+                entri
               </div>
+
+              {/* Form Pencarian */}
+              <form method="GET" class="flex items-center w-full sm:w-auto">
+                <input type="hidden" name="limit" value={limit} />
+                <div class="relative w-full sm:w-64">
+                  <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <i data-lucide="search" class="w-4 h-4 text-gray-400"></i>
+                  </div>
+                  <input 
+                    type="text" 
+                    name="q" 
+                    value={searchQuery} 
+                    placeholder="Cari kategori..." 
+                    class="w-full pl-9 pr-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:ring-brand focus:border-brand outline-none"
+                  />
+                </div>
+                <button type="submit" class="ml-2 bg-slate-800 text-white px-3 py-2 rounded-lg text-sm font-bold hover:bg-slate-700 transition">
+                  Cari
+                </button>
+                {searchQuery && (
+                  <a href={`?limit=${limit}&page=1`} class="ml-2 text-red-500 hover:text-red-700 text-sm font-medium transition" title="Reset Pencarian">
+                    Reset
+                  </a>
+                )}
+              </form>
             </div>
 
             {/* Tabel Daftar Kategori */}
@@ -174,7 +217,11 @@ const routeHandler = async (c: any) => {
                       </tr>
                     ))}
                     {categories.length === 0 && (
-                      <tr><td colSpan={3} class="px-6 py-8 text-center text-gray-500">Belum ada kategori terdaftar di halaman ini.</td></tr>
+                      <tr>
+                        <td colSpan={3} class="px-6 py-8 text-center text-gray-500">
+                          {searchQuery ? `Tidak ada kategori yang cocok dengan pencarian "${searchQuery}".` : 'Belum ada kategori terdaftar.'}
+                        </td>
+                      </tr>
                     )}
                   </tbody>
                 </table>
@@ -189,7 +236,7 @@ const routeHandler = async (c: any) => {
               
               <div class="flex items-center space-x-2">
                 <a 
-                  href={page <= 1 ? '#' : `?page=${page - 1}&limit=${limit}`} 
+                  href={page <= 1 ? '#' : `?page=${page - 1}&limit=${limit}&q=${encodeURIComponent(searchQuery)}`} 
                   class={`px-4 py-2 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 transition-colors ${page <= 1 ? 'bg-gray-100 text-gray-400 cursor-not-allowed dark:bg-gray-800 dark:text-gray-600' : 'bg-white text-gray-700 hover:bg-gray-50 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-800'}`}
                   onclick={page <= 1 ? "event.preventDefault()" : ""}
                 >
@@ -201,7 +248,7 @@ const routeHandler = async (c: any) => {
                 </div>
 
                 <a 
-                  href={page >= totalPages ? '#' : `?page=${page + 1}&limit=${limit}`} 
+                  href={page >= totalPages ? '#' : `?page=${page + 1}&limit=${limit}&q=${encodeURIComponent(searchQuery)}`} 
                   class={`px-4 py-2 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 transition-colors ${page >= totalPages ? 'bg-gray-100 text-gray-400 cursor-not-allowed dark:bg-gray-800 dark:text-gray-600' : 'bg-white text-gray-700 hover:bg-gray-50 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-800'}`}
                   onclick={page >= totalPages ? "event.preventDefault()" : ""}
                 >
@@ -213,7 +260,7 @@ const routeHandler = async (c: any) => {
           </div>
         </div>
 
-        {/* Modal Edit (Tetap dipertahankan seutuhnya) */}
+        {/* Modal Edit */}
         <div id="editModal" class="hidden fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
           <div class="bg-white dark:bg-gray-800 rounded-xl shadow-lg border border-gray-200 dark:border-gray-700 w-full max-w-md overflow-hidden">
             <div class="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
@@ -259,6 +306,6 @@ const routeHandler = async (c: any) => {
   )
 }
 
-// 2. DAFTARKAN HANDLER UNTUK KEDUA METODE (SANGAT KRUSIAL)
+// 2. DAFTARKAN HANDLER UNTUK KEDUA METODE
 export const POST = createRoute(routeHandler)
-export default createRoute(routeHandler) // Ini untuk metode GET
+export default createRoute(routeHandler)
