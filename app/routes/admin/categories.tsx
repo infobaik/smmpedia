@@ -58,8 +58,29 @@ const routeHandler = async (c: any) => {
     }
   }
 
-  const categoriesData = await c.env.DB.prepare('SELECT * FROM categories ORDER BY name ASC').all()
+  // ==========================================
+  // LOGIKA PAGINASI SERVER-SIDE
+  // ==========================================
+  const url = new URL(c.req.url)
+  const page = Math.max(1, parseInt(url.searchParams.get('page') || '1'))
+  const limit = parseInt(url.searchParams.get('limit') || '10')
+  const offset = (page - 1) * limit
+
+  // Hitung total seluruh data
+  const countData = await c.env.DB.prepare('SELECT COUNT(*) as total FROM categories').first()
+  const totalItems = countData?.total || 0
+  const totalPages = Math.ceil(totalItems / limit) || 1
+
+  // Eksekusi data dengan batas paginasi
+  const categoriesData = await c.env.DB.prepare('SELECT * FROM categories ORDER BY name ASC LIMIT ?1 OFFSET ?2')
+    .bind(limit, offset)
+    .all()
+    
   const categories = categoriesData.results || []
+
+  // Indikator angka paginasi
+  const showingStart = totalItems === 0 ? 0 : offset + 1
+  const showingEnd = Math.min(offset + limit, totalItems)
 
   return c.render(
     <AdminLayout title="Master Kategori">
@@ -95,52 +116,104 @@ const routeHandler = async (c: any) => {
             </form>
           </div>
 
-          {/* Tabel Daftar Kategori */}
-          <div class="lg:col-span-2 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
-            <div class="overflow-x-auto">
-              <table class="w-full text-sm text-left">
-                <thead class="bg-gray-50 dark:bg-gray-900 text-gray-700 dark:text-gray-300">
-                  <tr>
-                    <th class="px-6 py-3 font-semibold">Nama Kategori</th>
-                    <th class="px-6 py-3 font-semibold">Deskripsi</th>
-                    <th class="px-6 py-3 font-semibold text-right">Aksi Manajemen</th>
-                  </tr>
-                </thead>
-                <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
-                  {categories.map((cat: any) => (
-                    <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                      <td class="px-6 py-4 font-bold text-gray-900 dark:text-white">{cat.name}</td>
-                      <td class="px-6 py-4 text-gray-500">{cat.description || '-'}</td>
-                      <td class="px-6 py-4 text-right">
-                        <div class="flex justify-end space-x-2">
-                          <button 
-                            onclick={`openEditModal('${cat.id}', '${cat.name.replace(/'/g, "\\'")}', '${(cat.description || '').replace(/'/g, "\\'")}')`}
-                            class="text-blue-600 hover:text-blue-800 bg-blue-50 dark:bg-blue-900/30 dark:hover:bg-blue-800/50 hover:bg-blue-100 p-2 rounded-lg transition"
-                            title="Edit Kategori"
-                          >
-                            <i data-lucide="edit" class="w-4 h-4"></i>
-                          </button>
-                          
-                          <form method="POST" onsubmit="return confirm('Yakin ingin menghapus kategori ini secara permanen?')" class="inline">
-                            <input type="hidden" name="_action" value="delete" />
-                            <input type="hidden" name="id" value={cat.id} />
-                            <button type="submit" class="text-red-600 hover:text-red-800 bg-red-50 dark:bg-red-900/30 dark:hover:bg-red-800/50 hover:bg-red-100 p-2 rounded-lg transition" title="Hapus Kategori">
-                              <i data-lucide="trash-2" class="w-4 h-4"></i>
-                            </button>
-                          </form>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                  {categories.length === 0 && (
-                    <tr><td colSpan={3} class="px-6 py-8 text-center text-gray-500">Belum ada kategori yang dibuat.</td></tr>
-                  )}
-                </tbody>
-              </table>
+          {/* Wrapper Tabel Data & Paginasi */}
+          <div class="lg:col-span-2 flex flex-col h-full">
+            
+            {/* Header Kontrol Paginasi */}
+            <div class="bg-white dark:bg-gray-800 p-4 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm flex items-center justify-between mb-4">
+              <div class="text-sm text-gray-600 dark:text-gray-300 flex items-center">
+                Tampilkan
+                <select 
+                  onchange="window.location.href='?limit=' + this.value + '&page=1'" 
+                  class="mx-2 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white rounded-lg p-1.5 focus:ring-brand focus:border-brand outline-none cursor-pointer"
+                >
+                  <option value="10" selected={limit === 10}>10</option>
+                  <option value="20" selected={limit === 20}>20</option>
+                  <option value="25" selected={limit === 25}>25</option>
+                  <option value="50" selected={limit === 50}>50</option>
+                </select>
+                entri per halaman
+              </div>
             </div>
+
+            {/* Tabel Daftar Kategori */}
+            <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden flex-grow mb-4">
+              <div class="overflow-x-auto">
+                <table class="w-full text-sm text-left">
+                  <thead class="bg-gray-50 dark:bg-gray-900 text-gray-700 dark:text-gray-300">
+                    <tr>
+                      <th class="px-6 py-3 font-semibold">Nama Kategori</th>
+                      <th class="px-6 py-3 font-semibold">Deskripsi</th>
+                      <th class="px-6 py-3 font-semibold text-right">Aksi Manajemen</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
+                    {categories.map((cat: any) => (
+                      <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                        <td class="px-6 py-4 font-bold text-gray-900 dark:text-white">{cat.name}</td>
+                        <td class="px-6 py-4 text-gray-500">{cat.description || '-'}</td>
+                        <td class="px-6 py-4 text-right">
+                          <div class="flex justify-end space-x-2">
+                            <button 
+                              onclick={`openEditModal('${cat.id}', '${cat.name.replace(/'/g, "\\'")}', '${(cat.description || '').replace(/'/g, "\\'")}')`}
+                              class="text-blue-600 hover:text-blue-800 bg-blue-50 dark:bg-blue-900/30 dark:hover:bg-blue-800/50 hover:bg-blue-100 p-2 rounded-lg transition"
+                              title="Edit Kategori"
+                            >
+                              <i data-lucide="edit" class="w-4 h-4"></i>
+                            </button>
+                            
+                            <form method="POST" onsubmit="return confirm('Yakin ingin menghapus kategori ini secara permanen?')" class="inline">
+                              <input type="hidden" name="_action" value="delete" />
+                              <input type="hidden" name="id" value={cat.id} />
+                              <button type="submit" class="text-red-600 hover:text-red-800 bg-red-50 dark:bg-red-900/30 dark:hover:bg-red-800/50 hover:bg-red-100 p-2 rounded-lg transition" title="Hapus Kategori">
+                                <i data-lucide="trash-2" class="w-4 h-4"></i>
+                              </button>
+                            </form>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {categories.length === 0 && (
+                      <tr><td colSpan={3} class="px-6 py-8 text-center text-gray-500">Belum ada kategori terdaftar di halaman ini.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Footer Kontrol Paginasi (Prev/Next) */}
+            <div class="bg-white dark:bg-gray-800 p-4 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4 mt-auto">
+              <span class="text-sm text-gray-600 dark:text-gray-400">
+                Menampilkan <span class="font-bold text-gray-900 dark:text-white">{showingStart}</span> sampai <span class="font-bold text-gray-900 dark:text-white">{showingEnd}</span> dari <span class="font-bold text-gray-900 dark:text-white">{totalItems}</span> entri
+              </span>
+              
+              <div class="flex items-center space-x-2">
+                <a 
+                  href={page <= 1 ? '#' : `?page=${page - 1}&limit=${limit}`} 
+                  class={`px-4 py-2 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 transition-colors ${page <= 1 ? 'bg-gray-100 text-gray-400 cursor-not-allowed dark:bg-gray-800 dark:text-gray-600' : 'bg-white text-gray-700 hover:bg-gray-50 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-800'}`}
+                  onclick={page <= 1 ? "event.preventDefault()" : ""}
+                >
+                  Sebelumnya
+                </a>
+                
+                <div class="px-4 py-2 text-sm font-bold bg-brand text-white rounded-lg shadow-sm">
+                  {page} / {totalPages}
+                </div>
+
+                <a 
+                  href={page >= totalPages ? '#' : `?page=${page + 1}&limit=${limit}`} 
+                  class={`px-4 py-2 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 transition-colors ${page >= totalPages ? 'bg-gray-100 text-gray-400 cursor-not-allowed dark:bg-gray-800 dark:text-gray-600' : 'bg-white text-gray-700 hover:bg-gray-50 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-800'}`}
+                  onclick={page >= totalPages ? "event.preventDefault()" : ""}
+                >
+                  Selanjutnya
+                </a>
+              </div>
+            </div>
+
           </div>
         </div>
 
+        {/* Modal Edit (Tetap dipertahankan seutuhnya) */}
         <div id="editModal" class="hidden fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
           <div class="bg-white dark:bg-gray-800 rounded-xl shadow-lg border border-gray-200 dark:border-gray-700 w-full max-w-md overflow-hidden">
             <div class="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
