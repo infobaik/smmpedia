@@ -6,26 +6,44 @@ const routeHandler = async (c: any) => {
   let message = null
   let isSuccess = false
 
-  // Logika Tambah Layanan Manual (POST)
+  // ==========================================
+  // LOGIKA CRUD (POST)
+  // ==========================================
   if (c.req.method === 'POST') {
     const body = await c.req.parseBody()
-    const id = `srv_${crypto.randomUUID().substring(0, 8)}`
-    
-    try {
-      await c.env.DB.prepare(`
-        INSERT INTO services (id, category_id, provider_slug, product_provider_id, name, type, rate, margin, min_order, max_order, status)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'active')
-      `).bind(
-        id, String(body.category_id), String(body.provider_slug), String(body.product_provider_id),
-        String(body.name), String(body.type || 'Default'), 
-        parseFloat(String(body.rate)), parseFloat(String(body.margin || 0)), 
-        parseInt(String(body.min_order)), parseInt(String(body.max_order))
-      ).run()
+    const action = body._action || 'create' // Default aksi adalah create
+
+    // AKSI: MENGHAPUS LAYANAN
+    if (action === 'delete') {
+      const id = String(body.id)
+      try {
+        await c.env.DB.prepare('DELETE FROM services WHERE id = ?1').bind(id).run()
+        message = "Produk layanan berhasil dihapus dari sistem."
+        isSuccess = true
+      } catch (e) {
+        message = "Gagal menghapus produk layanan."
+      }
+    } 
+    // AKSI: MENAMBAH LAYANAN MANUAL
+    else if (action === 'create') {
+      const id = `srv_${crypto.randomUUID().substring(0, 8)}`
       
-      message = "Produk layanan berhasil ditambahkan secara manual."
-      isSuccess = true
-    } catch (e) {
-      message = "Gagal menyimpan produk layanan. Periksa kembali isian Anda."
+      try {
+        await c.env.DB.prepare(`
+          INSERT INTO services (id, category_id, provider_slug, product_provider_id, name, type, rate, margin, min_order, max_order, status)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'active')
+        `).bind(
+          id, String(body.category_id), String(body.provider_slug), String(body.product_provider_id),
+          String(body.name), String(body.type || 'Default'), 
+          parseFloat(String(body.rate)), parseFloat(String(body.margin || 0)), 
+          parseInt(String(body.min_order)), parseInt(String(body.max_order))
+        ).run()
+        
+        message = "Produk layanan berhasil ditambahkan secara manual."
+        isSuccess = true
+      } catch (e) {
+        message = "Gagal menyimpan produk layanan. Periksa kembali isian Anda."
+      }
     }
   }
 
@@ -38,7 +56,6 @@ const routeHandler = async (c: any) => {
   const searchQuery = url.searchParams.get('q') || ''
   const offset = (page - 1) * limit
 
-  // Ambal master data kategori dan provider untuk kebutuhan form drop-down
   const categoriesData = await c.env.DB.prepare('SELECT id, name FROM categories ORDER BY name ASC').all()
   const providersData = await c.env.DB.prepare('SELECT slug, name FROM providers WHERE status = "active" ORDER BY name ASC').all()
   
@@ -49,7 +66,6 @@ const routeHandler = async (c: any) => {
   let services = []
 
   if (searchQuery) {
-    // Jalankan query pencarian jika kata kunci diisi (mencari berdasarkan nama produk atau nama kategori)
     const countData = await c.env.DB.prepare(`
       SELECT COUNT(*) as total FROM services s
       JOIN categories c ON s.category_id = c.id
@@ -68,7 +84,6 @@ const routeHandler = async (c: any) => {
     `).bind(`%${searchQuery}%`, limit, offset).all()
     services = servicesData.results || []
   } else {
-    // Jalankan query standar jika tidak ada kata kunci pencarian
     const countData = await c.env.DB.prepare('SELECT COUNT(*) as total FROM services').first()
     totalItems = countData?.total || 0
 
@@ -84,8 +99,6 @@ const routeHandler = async (c: any) => {
   }
 
   const totalPages = Math.ceil(totalItems / limit) || 1
-
-  // Menentukan batas angka indikator baris data yang tampil
   const showingStart = totalItems === 0 ? 0 : offset + 1
   const showingEnd = Math.min(offset + limit, totalItems)
 
@@ -93,7 +106,7 @@ const routeHandler = async (c: any) => {
     <AdminLayout title="Manajemen Produk">
       <div class="max-w-7xl mx-auto px-4 py-8">
         
-        {/* HEADER: DENGAN TOMBOL SINKRONISASI MEDANPEDIA */}
+        {/* HEADER */}
         <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
           <h1 class="text-2xl font-bold">Katalog Produk & Layanan</h1>
           <button id="syncMedanpediaBtn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 px-5 rounded-lg flex items-center transition shadow-sm">
@@ -107,15 +120,16 @@ const routeHandler = async (c: any) => {
           </div>
         )}
 
-        {/* Notifikasi Alert Proses Sinkronisasi */}
         <div id="syncAlertBox" class="hidden p-4 rounded-lg text-sm font-medium mb-6"></div>
 
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
           
-          {/* FORM TAMBAH MANUAL (OPSIONAL) */}
+          {/* FORM TAMBAH MANUAL */}
           <div class="bg-white dark:bg-gray-800 p-6 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm h-fit">
             <h2 class="text-lg font-bold mb-4 border-b border-gray-100 dark:border-gray-700 pb-2">Tambah Manual (Opsional)</h2>
             <form method="POST" class="space-y-4">
+              <input type="hidden" name="_action" value="create" />
+              
               <div>
                 <label class="block text-xs font-bold mb-1 uppercase text-gray-500">Master Kategori</label>
                 <select name="category_id" required class="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-brand text-sm">
@@ -170,13 +184,10 @@ const routeHandler = async (c: any) => {
             </form>
           </div>
 
-          {/* WRAPPER TABEL DATA, PENCARIAN & PAGINASI */}
           <div class="lg:col-span-2 flex flex-col h-full">
             
-            {/* PANEL KONTROL HEADER: SELECTION LIMIT & BAR PENCARIAN */}
+            {/* PANEL KONTROL HEADER */}
             <div class="bg-white dark:bg-gray-800 p-4 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4">
-              
-              {/* Dropdown Limit Entri */}
               <div class="text-sm text-gray-600 dark:text-gray-300 flex items-center">
                 Tampilkan
                 <select 
@@ -188,10 +199,9 @@ const routeHandler = async (c: any) => {
                   <option value="25" selected={limit === 25}>25</option>
                   <option value="50" selected={limit === 50}>50</option>
                 </select>
-                entri per halaman
+                entri
               </div>
 
-              {/* Form Input Pencarian */}
               <form method="GET" class="flex items-center w-full sm:w-auto">
                 <input type="hidden" name="limit" value={limit} />
                 <div class="relative w-full sm:w-64">
@@ -227,6 +237,7 @@ const routeHandler = async (c: any) => {
                       <th class="px-6 py-3 font-semibold">Provider API</th>
                       <th class="px-6 py-3 font-semibold">Harga Jual Total</th>
                       <th class="px-6 py-3 font-semibold text-center">Status</th>
+                      <th class="px-6 py-3 font-semibold text-center">Aksi</th>
                     </tr>
                   </thead>
                   <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
@@ -250,11 +261,20 @@ const routeHandler = async (c: any) => {
                             {s.status}
                           </span>
                         </td>
+                        <td class="px-6 py-4 text-center">
+                          <form method="POST" onsubmit="return confirm('Yakin ingin menghapus layanan ini secara permanen?')" class="inline">
+                            <input type="hidden" name="_action" value="delete" />
+                            <input type="hidden" name="id" value={s.id} />
+                            <button type="submit" class="text-red-600 hover:text-red-800 bg-red-50 dark:bg-red-900/30 dark:hover:bg-red-800/50 hover:bg-red-100 p-2 rounded-lg transition" title="Hapus Layanan">
+                              <i data-lucide="trash-2" class="w-4 h-4"></i>
+                            </button>
+                          </form>
+                        </td>
                       </tr>
                     ))}
                     {services.length === 0 && (
                       <tr>
-                        <td colSpan={4} class="px-6 py-8 text-center text-gray-500">
+                        <td colSpan={5} class="px-6 py-8 text-center text-gray-500">
                           {searchQuery ? `Tidak ada produk yang cocok dengan kata kunci "${searchQuery}".` : 'Belum ada layanan terdaftar. Silakan klik tombol Sinkronisasi.'}
                         </td>
                       </tr>
@@ -264,7 +284,7 @@ const routeHandler = async (c: any) => {
               </div>
             </div>
 
-            {/* PANEL FOOTER: NAVIGASI CONTROLLER & INDIKATOR DATA */}
+            {/* PANEL FOOTER: NAVIGASI CONTROLLER */}
             <div class="bg-white dark:bg-gray-800 p-4 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4 mt-auto">
               <span class="text-sm text-gray-600 dark:text-gray-400">
                 Menampilkan <span class="font-bold text-gray-900 dark:text-white">{showingStart}</span> sampai <span class="font-bold text-gray-900 dark:text-white">{showingEnd}</span> dari <span class="font-bold text-gray-900 dark:text-white">{totalItems}</span> entri
