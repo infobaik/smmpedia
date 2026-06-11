@@ -16,16 +16,18 @@ const routeHandler = async (c: any) => {
   
   const stats = { pending: 0, processing: 0, success: 0, error: 0, total: 0 }
   statsData.results?.forEach((row: any) => {
-    if (row.status === 'pending') stats.pending = row.count
-    else if (row.status === 'processing') stats.processing = row.count
-    else if (row.status === 'success') stats.success = row.count
-    else if (row.status === 'error' || row.status === 'canceled' || row.status === 'partial') stats.error += row.count
+    if (row.status === 'pending' || row.status === 'waiting') stats.pending = row.count
+    else if (row.status === 'processing' || row.status === 'sedang berjalan') stats.processing = row.count
+    else if (row.status === 'success' || row.status === 'completed') stats.success = row.count
+    else if (['error', 'canceled', 'partial'].includes(row.status)) stats.error += row.count
     stats.total += row.count
   })
 
-  // Ambil 5 pesanan terakhir
+  // ==========================================================
+  // PERBAIKAN: Menambahkan start_count dan remains ke Kueri
+  // ==========================================================
   const recentOrdersData = await c.env.DB.prepare(`
-    SELECT o.id, s.name, o.quantity, o.charge, o.status, o.created_at 
+    SELECT o.id, s.name, o.quantity, o.charge, o.status, o.created_at, o.start_count, o.remains 
     FROM orders o JOIN services s ON o.service_id = s.id 
     WHERE o.user_id = ?1 ORDER BY o.created_at DESC LIMIT 5
   `).bind(userSession.userId).all()
@@ -49,7 +51,7 @@ const routeHandler = async (c: any) => {
         {/* TOMBOL PINTASAN AKSES RESELLER & REFERRAL */}
         <div class="bg-gradient-to-r from-indigo-600 to-blue-600 rounded-2xl p-6 text-white shadow-lg flex flex-col sm:flex-row items-center justify-between gap-4">
           <div class="flex items-center">
-            <div class="bg-white/20 p-3 rounded-full mr-4">
+            <div class="bg-white/20 p-3 rounded-full mr-4 hidden sm:block">
               <i data-lucide="code-2" class="w-8 h-8 text-white"></i>
             </div>
             <div>
@@ -67,34 +69,34 @@ const routeHandler = async (c: any) => {
           <div class="bg-white dark:bg-gray-800 p-5 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm flex items-center">
             <div class="bg-blue-100 dark:bg-blue-900/40 p-3 rounded-lg mr-4"><i data-lucide="shopping-bag" class="w-6 h-6 text-blue-600 dark:text-blue-400"></i></div>
             <div>
-              <p class="text-sm text-gray-500 dark:text-gray-400 font-medium">Total Pesanan</p>
-              <p class="text-2xl font-bold text-gray-900 dark:text-white">{stats.total}</p>
+              <p class="text-xs sm:text-sm text-gray-500 dark:text-gray-400 font-medium">Total Pesanan</p>
+              <p class="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white">{stats.total}</p>
             </div>
           </div>
           <div class="bg-white dark:bg-gray-800 p-5 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm flex items-center">
             <div class="bg-amber-100 dark:bg-amber-900/40 p-3 rounded-lg mr-4"><i data-lucide="loader" class="w-6 h-6 text-amber-600 dark:text-amber-400"></i></div>
             <div>
-              <p class="text-sm text-gray-500 dark:text-gray-400 font-medium">Memproses</p>
-              <p class="text-2xl font-bold text-gray-900 dark:text-white">{stats.processing + stats.pending}</p>
+              <p class="text-xs sm:text-sm text-gray-500 dark:text-gray-400 font-medium">Memproses</p>
+              <p class="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white">{stats.processing + stats.pending}</p>
             </div>
           </div>
           <div class="bg-white dark:bg-gray-800 p-5 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm flex items-center">
             <div class="bg-green-100 dark:bg-green-900/40 p-3 rounded-lg mr-4"><i data-lucide="check-circle" class="w-6 h-6 text-green-600 dark:text-green-400"></i></div>
             <div>
-              <p class="text-sm text-gray-500 dark:text-gray-400 font-medium">Selesai</p>
-              <p class="text-2xl font-bold text-gray-900 dark:text-white">{stats.success}</p>
+              <p class="text-xs sm:text-sm text-gray-500 dark:text-gray-400 font-medium">Selesai</p>
+              <p class="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white">{stats.success}</p>
             </div>
           </div>
           <div class="bg-white dark:bg-gray-800 p-5 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm flex items-center">
             <div class="bg-red-100 dark:bg-red-900/40 p-3 rounded-lg mr-4"><i data-lucide="x-circle" class="w-6 h-6 text-red-600 dark:text-red-400"></i></div>
             <div>
-              <p class="text-sm text-gray-500 dark:text-gray-400 font-medium">Gagal/Error</p>
-              <p class="text-2xl font-bold text-gray-900 dark:text-white">{stats.error}</p>
+              <p class="text-xs sm:text-sm text-gray-500 dark:text-gray-400 font-medium">Gagal/Error</p>
+              <p class="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white">{stats.error}</p>
             </div>
           </div>
         </div>
 
-        {/* TABEL PESANAN TERAKHIR */}
+        {/* TABEL PESANAN TERAKHIR - UPDATE KOLOM HITUNGAN & SISA */}
         <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
           <div class="p-5 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
             <h2 class="text-lg font-bold text-gray-900 dark:text-white">Pesanan Terakhir</h2>
@@ -105,7 +107,7 @@ const routeHandler = async (c: any) => {
               <thead class="bg-gray-50 dark:bg-gray-900 text-gray-700 dark:text-gray-300">
                 <tr>
                   <th class="px-6 py-3 font-semibold">ID & Layanan</th>
-                  <th class="px-6 py-3 font-semibold">Jumlah</th>
+                  <th class="px-6 py-3 font-semibold text-center whitespace-nowrap">Target & Hitungan</th>
                   <th class="px-6 py-3 font-semibold">Harga</th>
                   <th class="px-6 py-3 font-semibold text-center">Status</th>
                 </tr>
@@ -116,23 +118,39 @@ const routeHandler = async (c: any) => {
                 ) : (
                   recentOrders.map((o: any) => {
                     let statusColor = 'bg-gray-100 text-gray-800'
-                    if (o.status === 'success') statusColor = 'bg-green-100 text-green-700'
-                    else if (o.status === 'processing') statusColor = 'bg-blue-100 text-blue-700'
-                    else if (o.status === 'pending') statusColor = 'bg-amber-100 text-amber-700'
-                    else if (['error', 'canceled', 'partial'].includes(o.status)) statusColor = 'bg-red-100 text-red-700'
+                    if (o.status === 'success' || o.status === 'completed') statusColor = 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                    else if (o.status === 'processing' || o.status === 'sedang berjalan') statusColor = 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+                    else if (o.status === 'pending' || o.status === 'waiting') statusColor = 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400'
+                    else if (['error', 'canceled', 'partial'].includes(o.status)) statusColor = 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
                     
                     const orderDate = new Date(o.created_at).toLocaleDateString('id-ID', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                    
+                    const startCountStr = o.start_count !== null ? o.start_count : '-'
+                    const remainsStr = o.remains !== null ? o.remains : '-'
 
                     return (
                       <tr class="hover:bg-gray-50 dark:hover:bg-gray-750 transition">
                         <td class="px-6 py-4">
-                          <div class="font-bold text-gray-900 dark:text-white line-clamp-1">{o.name}</div>
-                          <div class="text-xs text-gray-500 mt-1 font-mono">{o.id.substring(0,8)} • {orderDate}</div>
+                          <div class="font-bold text-gray-900 dark:text-white line-clamp-1" title={o.name}>{o.name}</div>
+                          <div class="text-xs text-gray-500 mt-1 font-mono">{o.id.split('_')[1] || o.id.substring(0,8)} • {orderDate}</div>
                         </td>
-                        <td class="px-6 py-4 font-semibold text-gray-700 dark:text-gray-300">{o.quantity.toLocaleString('id-ID')}</td>
-                        <td class="px-6 py-4 font-bold text-brand">Rp {o.charge.toLocaleString('id-ID')}</td>
+                        
+                        {/* Kolom Compact untuk Target, Start Count, dan Remains */}
+                        <td class="px-6 py-4">
+                          <div class="flex flex-col items-center justify-center space-y-1">
+                            <span class="font-bold text-gray-900 dark:text-white" title="Target / Jumlah yang dipesan">{o.quantity.toLocaleString('id-ID')}</span>
+                            <div class="flex items-center space-x-2 text-[10px] text-gray-500 dark:text-gray-400 font-mono">
+                              <span title="Mulai Hitungan">S: {startCountStr}</span>
+                              <span>|</span>
+                              <span title="Sisa">R: {remainsStr}</span>
+                            </div>
+                          </div>
+                        </td>
+                        
+                        <td class="px-6 py-4 font-bold text-brand whitespace-nowrap">Rp {o.charge.toLocaleString('id-ID')}</td>
+                        
                         <td class="px-6 py-4 text-center">
-                          <span class={`px-2.5 py-1 rounded-md text-[10px] font-extrabold uppercase tracking-wide ${statusColor}`}>
+                          <span class={`px-2.5 py-1 rounded-md text-[10px] font-extrabold uppercase tracking-wide whitespace-nowrap ${statusColor}`}>
                             {o.status}
                           </span>
                         </td>
