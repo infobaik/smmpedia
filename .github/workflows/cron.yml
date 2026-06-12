@@ -1,0 +1,16 @@
+name: Sinkronisasi Pesanan SMMPedia
+
+on:
+  schedule:
+    # Berjalan setiap 5 menit
+    - cron: '*/5 * * * *'
+  # Memungkinkan untuk menjalankan workflow secara manual dari tab Actions
+  workflow_dispatch:
+
+jobs:
+  cron:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit Sync Orders Endpoint
+        run: |
+          curl -s -X GET "https://smmpedia.pages.dev/api/cron/sync-orders?key=KunciRahasiaSaya123"
