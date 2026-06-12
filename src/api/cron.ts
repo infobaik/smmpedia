@@ -5,7 +5,7 @@ import type { Bindings } from '../index'
 export const cronRouter = new Hono<{ Bindings: Bindings }>()
 
 // =========================================================
-// CRON JOB: SINKRONISASI STATUS PESANAN (INDIVIDUAL & AUTO-FALLBACK)
+// CRON JOB: SINKRONISASI STATUS PESANAN (PROVIDERS TABLE)
 // =========================================================
 cronRouter.get('/sync-orders', async (c) => {
   const url = new URL(c.req.url)
@@ -17,13 +17,15 @@ cronRouter.get('/sync-orders', async (c) => {
   }
 
   try {
+    // PERBAIKAN MUTLAK: Menggunakan tabel 'providers' sesuai skema asli Anda!
     const pendingOrdersData = await c.env.DB.prepare(`
       SELECT o.id as local_id, o.provider_order_id, o.quantity,
-             cp.slug as provider_slug, cp.base_url, cp.request_method, cp.content_type, 
-             cp.headers_template, cp.check_body_template
+             s.provider_slug, 
+             p.slug as p_slug, p.type as provider_type, p.base_url, p.request_method, 
+             p.content_type, p.headers_template, p.check_body_template, p.response_mapping
       FROM orders o
       JOIN services s ON o.service_id = s.id
-      JOIN custom_providers cp ON s.provider_slug = cp.slug
+      JOIN providers p ON s.provider_slug = p.slug
       WHERE o.status IN ('pending', 'processing', 'waiting', 'sedang berjalan', 'sedang diproses')
         AND o.provider_order_id IS NOT NULL
       LIMIT 30
@@ -50,47 +52,49 @@ cronRouter.get('/sync-orders', async (c) => {
         .replace(/{{provider_order_id}}/g, String(providerOrderId))
     }
 
-    // =======================================================
-    // EKSEKUSI INDIVIDUAL: SATU PER SATU AGAR 100% TEMBUS
-    // =======================================================
     for (const order of pendingOrders) {
       try {
-        // 1. Siapkan Headers
+        if (!order.base_url) {
+           debugLogs.push({ local_id: order.local_id, error: "Base URL Provider kosong." })
+           continue
+        }
+
         let headers: any = { 'Accept': 'application/json' }
-        if (order.headers_template) {
+        if (order.headers_template && order.headers_template !== '{}') {
            try { headers = { ...headers, ...JSON.parse(parseTemplate(order.headers_template, order.provider_order_id)) } } catch(e){}
         }
-        if (order.content_type) headers['Content-Type'] = order.content_type
-        
-        // JIKA KOSONG, PAKAI DEFAULT MEDANPEDIA
-        if (!headers['Content-Type']) headers['Content-Type'] = 'application/x-www-form-urlencoded'
 
-        // 2. Siapkan Body dengan Smart Fallback
+        let fetchOptions: any = { method: order.request_method || 'POST' }
         let bodyPayload = parseTemplate(order.check_body_template || '', order.provider_order_id)
+
+        // FALLBACK UNTUK NATIVE / MEDANPEDIA (Template NULL/Kosong)
         if (!bodyPayload || bodyPayload.trim() === '') {
-            // JIKA TEMPLATE DATABASE KOSONG, GUNAKAN STANDARD MEDANPEDIA
-            bodyPayload = `api_id=${apiId}&api_key=${apiKey}&action=status&id=${order.provider_order_id}`
+            const payload = new URLSearchParams()
+            payload.append('api_id', String(apiId))
+            payload.append('api_key', String(apiKey))
+            payload.append('action', 'status')
+            payload.append('id', String(order.provider_order_id))
+            
+            bodyPayload = payload.toString()
+            headers['Content-Type'] = 'application/x-www-form-urlencoded' // Standar API SMM Panel
+        } else {
+            if (order.content_type) headers['Content-Type'] = order.content_type
         }
 
-        const fetchOptions: any = { method: order.request_method || 'POST', headers }
+        fetchOptions.headers = headers
         if (fetchOptions.method !== 'GET' && fetchOptions.method !== 'HEAD') {
           fetchOptions.body = bodyPayload
         }
 
-        // 3. Tembak API Pusat
+        // Tembak API Pusat
         const response = await fetch(order.base_url, fetchOptions)
         const result = await response.json()
 
-        // 4. Deteksi Otomatis Struktur Balasan (Auto-Detect JSON)
+        // Deteksi Otomatis Struktur Balasan (Auto-Detect JSON)
         let apiData = null;
-        
-        // Format A: { "data": { "status": "...", "start_count": 0 } }
         if (result?.data && result.data.status !== undefined) apiData = result.data
-        // Format B: { "status": "...", "start_count": 0 }
         else if (result?.status !== undefined && typeof result.status === 'string') apiData = result
-        // Format C: { "data": { "588": { "status": "..." } } } 
         else if (result?.data && result.data[order.provider_order_id]) apiData = result.data[order.provider_order_id]
-        // Format D: { "588": { "status": "..." } }
         else if (result && result[order.provider_order_id]) apiData = result[order.provider_order_id]
 
         if (apiData) {
@@ -105,7 +109,6 @@ cronRouter.get('/sync-orders', async (c) => {
           const startCount = parseInt(apiData.start_count) || 0
           const remains = parseInt(apiData.remains) || 0
 
-          // Update data ke Database
           updateQueries.push(
             c.env.DB.prepare(`
               UPDATE orders 
@@ -116,8 +119,7 @@ cronRouter.get('/sync-orders', async (c) => {
           updatedCount++
 
         } else {
-           // Jika JSON tidak sesuai format apapun, tangkap di log
-           debugLogs.push({ local_id: order.local_id, server_id: order.provider_order_id, error: "JSON tidak sesuai", raw_response: result })
+           debugLogs.push({ local_id: order.local_id, server_id: order.provider_order_id, error: "JSON tidak sesuai format SMM Panel", raw_response: result })
         }
 
       } catch (err: any) {
@@ -125,7 +127,6 @@ cronRouter.get('/sync-orders', async (c) => {
       }
     }
 
-    // Eksekusi semua update sekaligus
     if (updateQueries.length > 0) {
       await c.env.DB.batch(updateQueries)
     }
