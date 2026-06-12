@@ -5,29 +5,26 @@ import type { Bindings } from '../index'
 export const cronRouter = new Hono<{ Bindings: Bindings }>()
 
 // =========================================================
-// CRON JOB: SINKRONISASI STATUS PESANAN (BATCH CHECKING)
+// CRON JOB: SINKRONISASI STATUS PESANAN (DYNAMIC CUSTOM PROVIDERS)
 // =========================================================
 cronRouter.get('/sync-orders', async (c) => {
   const url = new URL(c.req.url)
   const cronKey = url.searchParams.get('key')?.trim()
   const systemSecret = c.env.CRON_SECRET
 
-  // Proteksi eksekusi Cron
+  // Proteksi Akses Cron
   if (cronKey !== 'KunciRahasiaSaya123' && cronKey !== systemSecret) {
-    return c.json({ 
-      error: 'Akses ditolak. Kunci Cron tidak valid.',
-      received_key: cronKey || 'KOSONG_TIDAK_TERBACA'
-    }, 401)
+    return c.json({ error: 'Akses ditolak. Kunci Cron tidak valid.', received_key: cronKey || 'KOSONG' }, 401)
   }
 
   try {
-    // PERBAIKAN: Menggunakan p.base_url sesuai skema tabel 'providers' Anda!
-    // Tidak lagi mencari api_id dan api_key di database.
+    // 1. Ambil pesanan & Join dengan custom_providers
     const pendingOrdersData = await c.env.DB.prepare(`
-      SELECT o.id as local_id, o.provider_order_id, p.slug as provider_slug, p.base_url
+      SELECT o.id as local_id, o.provider_order_id, 
+             cp.slug as provider_slug, cp.base_url, cp.request_method, cp.content_type, 
+             cp.headers_template, cp.check_body_template, cp.response_mapping
       FROM orders o
-      JOIN services s ON o.service_id = s.id
-      JOIN providers p ON s.provider_slug = p.slug
+      JOIN custom_providers cp ON o.provider_slug = cp.slug
       WHERE o.status IN ('pending', 'processing', 'waiting', 'sedang berjalan')
         AND o.provider_order_id IS NOT NULL
       LIMIT 30
@@ -39,101 +36,110 @@ cronRouter.get('/sync-orders', async (c) => {
       return c.json({ success: true, message: 'Tidak ada pesanan aktif yang perlu disinkronisasi saat ini.' })
     }
 
-    // Kelompokkan ID pesanan berdasarkan provider API-nya
-    const ordersByProvider: Record<string, any> = {}
-    for (const order of pendingOrders) {
-      if (!ordersByProvider[order.provider_slug]) {
-        ordersByProvider[order.provider_slug] = {
-          base_url: order.base_url,
-          orders: []
-        }
-      }
-      ordersByProvider[order.provider_slug].orders.push(order)
-    }
-
     const updateQueries = []
     let updatedCount = 0
 
-    // Eksekusi Request ke masing-masing Provider
-    for (const providerSlug in ordersByProvider) {
-      const provider = ordersByProvider[providerSlug]
-      
-      // Gabungkan Provider Order ID dengan koma (Contoh: "10023,10024,10025")
-      const providerOrderIds = provider.orders.map((o: any) => o.provider_order_id).join(',')
+    // Kredensial API dari Environment Cloudflare
+    const apiId = c.env.API_ID || c.env.MEDANPEDIA_API_ID || ''
+    const apiKey = c.env.API_KEY || c.env.MEDANPEDIA_API_KEY || ''
 
-      // KARENA KREDENSIAL TIDAK ADA DI DATABASE, KITA AMBIL DARI ENVIRONMENT (.dev.vars / CLOUDFLARE DASHBOARD)
-      // Sistem akan mencoba mencari MEDANPEDIA_API_ID atau API_ID
-      const apiId = c.env.MEDANPEDIA_API_ID || c.env.API_ID || ''
-      const apiKey = c.env.MEDANPEDIA_API_KEY || c.env.API_KEY || ''
+    // Fungsi Pembantu: Mengganti Placeholder Template
+    const parseTemplate = (templateStr: string, providerOrderId: string) => {
+      if (!templateStr) return ''
+      return templateStr
+        .replace(/{{api_id}}/g, String(apiId))
+        .replace(/{{api_key}}/g, String(apiKey))
+        .replace(/{{provider_order_id}}/g, String(providerOrderId))
+    }
 
-      if (!apiId || !apiKey) {
-        console.error(`CRON ERROR: API ID / API Key untuk provider ${providerSlug} tidak ditemukan di Environment Variables.`)
-        continue // Lewati provider ini dan lanjut ke yang lain jika API Key kosong
-      }
+    // Fungsi Pembantu: Mengekstrak nilai JSON bertingkat (contoh: "data.12345.status")
+    const getNestedValue = (obj: any, path: string) => {
+      if (!path || !obj) return undefined
+      return path.split('.').reduce((acc, part) => acc && acc[part] !== undefined ? acc[part] : undefined, obj)
+    }
 
-      const payload = new URLSearchParams()
-      payload.append('api_id', String(apiId))
-      payload.append('api_key', String(apiKey))
-      payload.append('action', 'status')
-      payload.append('id', providerOrderIds)
-
+    // 2. Eksekusi Request per Pesanan dengan Template Dinamis
+    for (const order of pendingOrders) {
       try {
-        const response = await fetch(provider.base_url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Accept': 'application/json'
-          },
-          body: payload.toString()
-        })
+        // A. Menyiapkan Headers
+        const rawHeaders = parseTemplate(order.headers_template || '{}', order.provider_order_id)
+        const headers = JSON.parse(rawHeaders)
+        if (order.content_type) headers['Content-Type'] = order.content_type
+        headers['Accept'] = 'application/json'
 
+        // B. Menyiapkan Body
+        const bodyPayload = parseTemplate(order.check_body_template || '', order.provider_order_id)
+
+        const fetchOptions: any = {
+          method: order.request_method || 'POST',
+          headers: headers,
+        }
+        
+        if (fetchOptions.method !== 'GET' && fetchOptions.method !== 'HEAD') {
+          fetchOptions.body = bodyPayload
+        }
+
+        // C. Eksekusi Tembakan API
+        const response = await fetch(order.base_url, fetchOptions)
         const result = await response.json()
 
-        // Mapping dan Parsing Respon API
-        if (result && result.status && result.data) {
-          for (const order of provider.orders) {
-            const apiData = result.data[order.provider_order_id]
-            
-            if (apiData) {
-              const rawStatus = String(apiData.status).toLowerCase()
-              let normalizedStatus = 'pending'
-              
-              if (['success', 'completed'].includes(rawStatus)) normalizedStatus = 'success'
-              else if (['processing', 'in progress', 'sedang berjalan'].includes(rawStatus)) normalizedStatus = 'processing'
-              else if (['error', 'canceled', 'cancelled'].includes(rawStatus)) normalizedStatus = 'error'
-              else if (['partial'].includes(rawStatus)) normalizedStatus = 'partial'
+        // D. Parsing Response Mapping
+        // Mengubah placeholder {{provider_order_id}} di mapping jika provider menggunakan format dinamis (seperti Medanpedia)
+        const rawMapping = parseTemplate(order.response_mapping || '{}', order.provider_order_id)
+        const mapping = JSON.parse(rawMapping)
 
-              const startCount = parseInt(apiData.start_count) || 0
-              const remains = parseInt(apiData.remains) || 0
+        const statusKey = mapping.status_key || 'status'
+        const startCountKey = mapping.start_count_key || 'start_count'
+        const remainsKey = mapping.remains_key || 'remains'
 
-              updateQueries.push(
-                c.env.DB.prepare(`
-                  UPDATE orders 
-                  SET status = ?1, start_count = ?2, remains = ?3 
-                  WHERE id = ?4
-                `).bind(normalizedStatus, startCount, remains, order.local_id)
-              )
-              updatedCount++
-            }
-          }
+        const rawStatus = getNestedValue(result, statusKey)
+
+        if (rawStatus !== undefined) {
+          const statusStr = String(rawStatus).toLowerCase()
+          let normalizedStatus = 'pending'
+          
+          // Membaca aturan sukses khusus jika ada di mapping, jika tidak gunakan standar
+          const successVal = mapping.success_value ? String(mapping.success_value).toLowerCase() : 'success'
+          const processingVal = mapping.processing_value ? String(mapping.processing_value).toLowerCase() : 'processing'
+          
+          if (statusStr === successVal || ['success', 'completed'].includes(statusStr)) normalizedStatus = 'success'
+          else if (statusStr === processingVal || ['processing', 'in progress', 'sedang berjalan'].includes(statusStr)) normalizedStatus = 'processing'
+          else if (['error', 'canceled', 'cancelled', 'fail'].includes(statusStr)) normalizedStatus = 'error'
+          else if (['partial'].includes(statusStr)) normalizedStatus = 'partial'
+
+          const startCount = parseInt(getNestedValue(result, startCountKey)) || 0
+          const remains = parseInt(getNestedValue(result, remainsKey)) || 0
+
+          updateQueries.push(
+            c.env.DB.prepare(`
+              UPDATE orders 
+              SET status = ?1, start_count = ?2, remains = ?3 
+              WHERE id = ?4
+            `).bind(normalizedStatus, startCount, remains, order.local_id)
+          )
+          updatedCount++
+        } else {
+          console.warn(`Sinkronisasi Gagal: Key '${statusKey}' tidak ditemukan di respon provider untuk pesanan ${order.local_id}`)
         }
-      } catch (fetchError) {
-        console.error(`Gagal menghubungi provider ${providerSlug}:`, fetchError)
+
+      } catch (err) {
+        console.error(`Gagal memproses pesanan ${order.local_id} ke provider ${order.provider_slug}:`, err)
       }
     }
 
-    // Eksekusi Batch Update secara Atomik
+    // 3. Eksekusi Batch Pembaruan Status
     if (updateQueries.length > 0) {
       await c.env.DB.batch(updateQueries)
     }
 
     return c.json({ 
       success: true, 
-      message: `Pengecekan selesai. ${updatedCount} pesanan berhasil disinkronisasi.`,
-      processed_orders: pendingOrders.length
+      message: `Berhasil tersinkronisasi. ${updatedCount} dari ${pendingOrders.length} antrean pesanan telah diperbarui.`,
+      processed: pendingOrders.length,
+      updated: updatedCount
     })
 
   } catch (error: any) {
-    return c.json({ error: 'Gagal mengeksekusi Cron Job.', details: error.message }, 500)
+    return c.json({ error: 'Sistem mengalami kegagalan.', details: error.message }, 500)
   }
 })
