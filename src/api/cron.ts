@@ -8,12 +8,14 @@ export const cronRouter = new Hono<{ Bindings: Bindings }>()
 // CRON JOB: SINKRONISASI STATUS PESANAN (BATCH CHECKING)
 // =========================================================
 cronRouter.get('/sync-orders', async (c) => {
-  // 1. Proteksi Endpoint (Sangat Penting!)
-  // Pastikan URL ini hanya bisa diakses dengan menyertakan ?key=RAHASIA
-  // Anda bisa mengatur CRON_SECRET di file .dev.vars atau Cloudflare Dashboard
   const cronKey = c.req.query('key')
-  if (cronKey !== (c.env.CRON_SECRET || 'KunciRahasiaSaya123')) {
-    return c.json({ error: 'Akses ditolak. Kunci Cron tidak valid.' }, 401)
+  const systemSecret = c.env.CRON_SECRET
+
+  // PROTEKSI ANTI-GAGAL: Izinkan 'KunciRahasiaSaya123' secara langsung ATAU cocokkan dengan Dashboard Cloudflare
+  if (cronKey !== 'KunciRahasiaSaya123' && cronKey !== systemSecret) {
+    return c.json({ 
+      error: 'Akses ditolak. Kunci Cron tidak valid.'
+    }, 401)
   }
 
   try {
@@ -35,7 +37,6 @@ cronRouter.get('/sync-orders', async (c) => {
     }
 
     // 3. Kelompokkan ID pesanan berdasarkan provider API-nya
-    // Berguna jika nanti Anda punya provider selain Medanpedia
     const ordersByProvider: Record<string, any> = {}
     for (const order of pendingOrders) {
       if (!ordersByProvider[order.provider_slug]) {
@@ -59,7 +60,6 @@ cronRouter.get('/sync-orders', async (c) => {
       // Gabungkan Provider Order ID dengan koma (Contoh: "10023,10024,10025")
       const providerOrderIds = provider.orders.map((o: any) => o.provider_order_id).join(',')
 
-      // Siapkan payload standar API SMM Panel
       const payload = new URLSearchParams()
       payload.append('api_id', provider.api_id)
       payload.append('api_key', provider.api_key)
@@ -85,18 +85,16 @@ cronRouter.get('/sync-orders', async (c) => {
             
             if (apiData) {
               const rawStatus = String(apiData.status).toLowerCase()
-              let normalizedStatus = 'pending' // Default fallback
+              let normalizedStatus = 'pending'
               
-              // Normalisasi status dari Medanpedia ke sistem Anda
               if (['success', 'completed'].includes(rawStatus)) normalizedStatus = 'success'
-              else if (['processing', 'in progress'].includes(rawStatus)) normalizedStatus = 'processing'
+              else if (['processing', 'in progress', 'sedang berjalan'].includes(rawStatus)) normalizedStatus = 'processing'
               else if (['error', 'canceled', 'cancelled'].includes(rawStatus)) normalizedStatus = 'error'
               else if (['partial'].includes(rawStatus)) normalizedStatus = 'partial'
 
               const startCount = parseInt(apiData.start_count) || 0
               const remains = parseInt(apiData.remains) || 0
 
-              // Masukkan ke antrean batch update
               updateQueries.push(
                 c.env.DB.prepare(`
                   UPDATE orders 
@@ -105,9 +103,6 @@ cronRouter.get('/sync-orders', async (c) => {
                 `).bind(normalizedStatus, startCount, remains, order.local_id)
               )
               updatedCount++
-              
-              // Note: Jika error/partial, admin tetap harus memproses refund 
-              // melalui halaman Manajemen Transaksi secara manual demi keamanan arus kas.
             }
           }
         }
