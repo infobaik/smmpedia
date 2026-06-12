@@ -18,13 +18,14 @@ cronRouter.get('/sync-orders', async (c) => {
   }
 
   try {
-    // 1. Ambil pesanan & Join dengan custom_providers
+    // PERBAIKAN MUTLAK: Relasi kueri diperbaiki, melalui tabel services (s) terlebih dahulu!
     const pendingOrdersData = await c.env.DB.prepare(`
       SELECT o.id as local_id, o.provider_order_id, 
              cp.slug as provider_slug, cp.base_url, cp.request_method, cp.content_type, 
              cp.headers_template, cp.check_body_template, cp.response_mapping
       FROM orders o
-      JOIN custom_providers cp ON o.provider_slug = cp.slug
+      JOIN services s ON o.service_id = s.id
+      JOIN custom_providers cp ON s.provider_slug = cp.slug
       WHERE o.status IN ('pending', 'processing', 'waiting', 'sedang berjalan')
         AND o.provider_order_id IS NOT NULL
       LIMIT 30
@@ -58,7 +59,7 @@ cronRouter.get('/sync-orders', async (c) => {
       return path.split('.').reduce((acc, part) => acc && acc[part] !== undefined ? acc[part] : undefined, obj)
     }
 
-    // 2. Eksekusi Request per Pesanan dengan Template Dinamis
+    // Eksekusi Request per Pesanan dengan Template Dinamis
     for (const order of pendingOrders) {
       try {
         // A. Menyiapkan Headers
@@ -79,12 +80,11 @@ cronRouter.get('/sync-orders', async (c) => {
           fetchOptions.body = bodyPayload
         }
 
-        // C. Eksekusi Tembakan API
+        // C. Eksekusi Request API ke Provider
         const response = await fetch(order.base_url, fetchOptions)
         const result = await response.json()
 
         // D. Parsing Response Mapping
-        // Mengubah placeholder {{provider_order_id}} di mapping jika provider menggunakan format dinamis (seperti Medanpedia)
         const rawMapping = parseTemplate(order.response_mapping || '{}', order.provider_order_id)
         const mapping = JSON.parse(rawMapping)
 
@@ -98,7 +98,6 @@ cronRouter.get('/sync-orders', async (c) => {
           const statusStr = String(rawStatus).toLowerCase()
           let normalizedStatus = 'pending'
           
-          // Membaca aturan sukses khusus jika ada di mapping, jika tidak gunakan standar
           const successVal = mapping.success_value ? String(mapping.success_value).toLowerCase() : 'success'
           const processingVal = mapping.processing_value ? String(mapping.processing_value).toLowerCase() : 'processing'
           
@@ -119,7 +118,7 @@ cronRouter.get('/sync-orders', async (c) => {
           )
           updatedCount++
         } else {
-          console.warn(`Sinkronisasi Gagal: Key '${statusKey}' tidak ditemukan di respon provider untuk pesanan ${order.local_id}`)
+          console.warn(`Sinkronisasi Gagal: Key '${statusKey}' tidak ditemukan di respon untuk pesanan ${order.local_id}`)
         }
 
       } catch (err) {
@@ -127,7 +126,7 @@ cronRouter.get('/sync-orders', async (c) => {
       }
     }
 
-    // 3. Eksekusi Batch Pembaruan Status
+    // Eksekusi Batch Update ke Database D1
     if (updateQueries.length > 0) {
       await c.env.DB.batch(updateQueries)
     }
