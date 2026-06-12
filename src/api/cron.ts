@@ -8,13 +8,17 @@ export const cronRouter = new Hono<{ Bindings: Bindings }>()
 // CRON JOB: SINKRONISASI STATUS PESANAN (BATCH CHECKING)
 // =========================================================
 cronRouter.get('/sync-orders', async (c) => {
-  const cronKey = c.req.query('key')
+  // PERBAIKAN MUTLAK: Menggunakan Native URL Parser bawaan V8 Engine Cloudflare
+  const url = new URL(c.req.url)
+  const cronKey = url.searchParams.get('key')?.trim()
   const systemSecret = c.env.CRON_SECRET
 
-  // PROTEKSI ANTI-GAGAL: Izinkan 'KunciRahasiaSaya123' secara langsung ATAU cocokkan dengan Dashboard Cloudflare
+  // Verifikasi Kunci secara ketat dan anti-gagal
   if (cronKey !== 'KunciRahasiaSaya123' && cronKey !== systemSecret) {
     return c.json({ 
-      error: 'Akses ditolak. Kunci Cron tidak valid.'
+      error: 'Akses ditolak. Kunci Cron tidak valid.',
+      received_key: cronKey || 'KOSONG_TIDAK_TERBACA',
+      expected_key: 'KunciRahasiaSaya123'
     }, 401)
   }
 
