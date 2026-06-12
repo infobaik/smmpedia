@@ -1,11 +1,10 @@
-// src/api/cron.ts
+// src/api/orders.ts
 import { Hono } from 'hono'
-import { fetchMedanpedia } from './medanpedia' // KITA PANGGIL FUNGSI SAKTI ANDA DI SINI!
+import { fetchMedanpedia } from './medanpedia'
 import type { Bindings } from '../index'
 
-export const cronRouter = new Hono<{ Bindings: Bindings }>()
+export const ordersRouter = new Hono<{ Bindings: Bindings }>()
 
-// Fungsi pembantu persis seperti di orders.ts
 function buildPayload(templateStr: string, data: Record<string, any>) {
   let parsedStr = templateStr;
   for (const [key, value] of Object.entries(data)) {
@@ -14,75 +13,87 @@ function buildPayload(templateStr: string, data: Record<string, any>) {
   return JSON.parse(parsedStr);
 }
 
-// =========================================================
-// CRON JOB: SINKRONISASI STATUS PESANAN (FINAL & 100% IDENTIK DENGAN ORDERS.TS)
-// =========================================================
-cronRouter.get('/sync-orders', async (c) => {
-  const url = new URL(c.req.url)
-  const cronKey = url.searchParams.get('key')?.trim()
-  const systemSecret = c.env.CRON_SECRET
-
-  if (cronKey !== 'KunciRahasiaSaya123' && cronKey !== systemSecret) {
-    return c.json({ error: 'Akses ditolak.' }, 401)
-  }
-
+ordersRouter.post('/create', async (c) => {
   try {
-    const pendingOrdersData = await c.env.DB.prepare(`
-      SELECT o.id as local_id, o.provider_order_id, o.quantity,
-             s.provider_slug, 
-             p.slug as p_slug, p.type as provider_type, p.base_url, p.request_method, 
-             p.content_type, p.headers_template, p.check_body_template, p.response_mapping
-      FROM orders o
-      JOIN services s ON o.service_id = s.id
-      JOIN providers p ON s.provider_slug = p.slug
-      WHERE o.status IN ('pending', 'processing', 'waiting', 'sedang berjalan', 'sedang diproses')
-        AND o.provider_order_id IS NOT NULL
-      LIMIT 30
-    `).all()
+    const body = await c.req.json()
+    // MURNI TANPA MEDIA UPLOAD
+    const { userId, localServiceId, link, quantity, idempotencyKey } = body
 
-    const pendingOrders = pendingOrdersData.results || []
-
-    if (pendingOrders.length === 0) {
-      return c.json({ success: true, message: 'Semua pesanan sudah selesai atau tidak ada yang pending.' })
+    if (!userId || !localServiceId || !link || !quantity || !idempotencyKey) {
+      return c.json({ error: 'Data pesanan tidak lengkap' }, 400)
     }
 
-    const updateQueries = []
-    let updatedCount = 0
-    const debugLogs = []
+    // Proteksi Double-Click (Idempotency)
+    try {
+      await c.env.DB.prepare('INSERT INTO idempotency_store (key) VALUES (?1)').bind(idempotencyKey).run()
+    } catch {
+      return c.json({ error: 'Pesanan sedang diproses, harap tunggu...' }, 409)
+    }
 
-    for (const order of pendingOrders) {
+    // Pengecekan Service menggunakan provider_slug (sesuai normalisasi DB terbaru)
+    const service = await c.env.DB.prepare('SELECT * FROM services WHERE id = ?1 AND status = "active"').bind(localServiceId).first()
+    if (!service) return c.json({ error: 'Layanan tidak valid atau sedang tidak aktif' }, 404)
+
+    const charge = (Number(service.rate) + Number(service.margin || 0)) * (quantity / 1000)
+
+    // Pengecekan dan Pemotongan Saldo Atomik
+    const deductResult = await c.env.DB.prepare(`
+      UPDATE users SET balance = balance - ?1 WHERE id = ?2 AND balance >= ?1
+    `).bind(charge, userId).run()
+
+    if (deductResult.meta.changes === 0) return c.json({ error: 'Saldo tidak mencukupi untuk pesanan ini' }, 400)
+
+    // STATE AWAL SAGA: Catat pesanan processing SEBELUM memanggil API
+    const localOrderId = crypto.randomUUID()
+    await c.env.DB.prepare(`
+      INSERT INTO orders (id, user_id, service_id, provider_order_id, link, quantity, charge, status)
+      VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, 'processing')
+    `).bind(localOrderId, userId, localServiceId, link, quantity, charge).run()
+
+    let providerOrderIdStr = null;
+    let isNetworkError = false;
+    let providerErrorMessage = null;
+
+    // ==========================================
+    // ROUTING PROVIDER
+    // ==========================================
+    if (service.provider_slug === 'medanpedia') {
       try {
-        let result: any = null;
+        const providerResponse = await fetchMedanpedia(c.env.MEDANPEDIA_API_KEY, 'add', {
+          service: service.product_provider_id,
+          link: link,
+          quantity: quantity
+        })
 
-        // ==========================================
-        // ROUTING PROVIDER (SAMA SEPERTI DI ORDERS.TS)
-        // ==========================================
-        if (order.provider_slug === 'medanpedia') {
-          // GUNAKAN FUNGSI BAWAAN MEDANPEDIA ANDA!
-          // Untuk check status, biasanya parameter objeknya berisi "id"
-          result = await fetchMedanpedia(c.env.MEDANPEDIA_API_KEY, 'status', {
-            id: order.provider_order_id
-          })
-          
-          debugLogs.push({ msg: "Log Medanpedia", result })
-          
+        if (providerResponse.error) {
+          providerErrorMessage = providerResponse.error
+        } else if (providerResponse.order) {
+          providerOrderIdStr = providerResponse.order.toString()
         } else {
-          // CUSTOM PROVIDER
-          if (!order.base_url) {
-             debugLogs.push({ local_id: order.local_id, error: "Base URL Provider kosong." })
-             continue
-          }
+          isNetworkError = true
+        }
+      } catch (e) {
+        isNetworkError = true
+      }
 
-          const payload = buildPayload(order.check_body_template || '{}', { 
-            provider_order_id: order.provider_order_id,
-            api_id: c.env.API_ID || '',
-            api_key: c.env.API_KEY || ''
+    } else {
+      // Routing ke Custom Provider
+      const customProvider = await c.env.DB.prepare('SELECT * FROM providers WHERE slug = ?1 AND status = "active"').bind(service.provider_slug).first()
+      
+      if (!customProvider) {
+        providerErrorMessage = "Konfigurasi Custom Provider sedang offline."
+      } else {
+        try {
+          const payload = buildPayload(customProvider.order_body_template as string, { 
+            link: link, 
+            quantity: quantity, 
+            product_provider_id: service.product_provider_id 
           })
 
-          const headers = JSON.parse(order.headers_template || '{}')
+          const headers = JSON.parse(customProvider.headers_template as string)
           let bodyData: BodyInit;
 
-          if (order.content_type === 'application/x-www-form-urlencoded') {
+          if (customProvider.content_type === 'application/x-www-form-urlencoded') {
             const urlSearchParams = new URLSearchParams()
             for (const [key, value] of Object.entries(payload)) { urlSearchParams.append(key, String(value)) }
             bodyData = urlSearchParams.toString()
@@ -92,83 +103,51 @@ cronRouter.get('/sync-orders', async (c) => {
             headers['Content-Type'] = 'application/json'
           }
 
-          const response = await fetch(order.base_url, {
-            method: order.request_method || 'POST',
+          const response = await fetch(customProvider.base_url as string, {
+            method: customProvider.request_method as string,
             headers: headers,
             body: bodyData
           })
 
-          result = await response.json()
-        }
-
-        // ==========================================
-        // AUTO-DETECT STATUS RESPONSE JSON
-        // ==========================================
-        let apiData = null;
-        
-        // A. Cek Response Mapping Khusus Custom Provider
-        if (order.provider_slug !== 'medanpedia' && order.response_mapping && order.response_mapping !== '{}') {
-           const mapping = buildPayload(order.response_mapping, { provider_order_id: order.provider_order_id })
-           const getNestedValue = (obj: any, path: string) => path.split('.').reduce((acc, part) => acc && acc[part] !== undefined ? acc[part] : undefined, obj)
-           
-           const statusVal = getNestedValue(result, mapping.status_key || 'status')
-           if (statusVal !== undefined) {
-             apiData = {
-               status: statusVal,
-               start_count: getNestedValue(result, mapping.start_count_key || 'start_count'),
-               remains: getNestedValue(result, mapping.remains_key || 'remains')
-             }
-           }
-        } 
-        
-        // B. Jika tidak ada mapping khusus, gunakan sistem Auto-Detect SMM Panel
-        if (!apiData) {
-          if (result?.data && result.data.status !== undefined) apiData = result.data
-          else if (result?.status !== undefined && typeof result.status === 'string') apiData = result
-          else if (result?.data && result.data[order.provider_order_id]) apiData = result.data[order.provider_order_id]
-          else if (result && result[order.provider_order_id]) apiData = result[order.provider_order_id]
-        }
-
-        if (apiData && apiData.status) {
-          const rawStatus = String(apiData.status).toLowerCase().trim()
-          let normalizedStatus = 'pending'
+          const customResult = await response.json()
+          const mapping = JSON.parse(customProvider.response_mapping as string)
           
-          if (['success', 'completed', 'selesai'].includes(rawStatus)) normalizedStatus = 'success'
-          else if (['processing', 'in progress', 'sedang berjalan', 'sedang diproses'].includes(rawStatus)) normalizedStatus = 'processing'
-          else if (['error', 'canceled', 'cancelled', 'fail', 'permintaan batal', 'batal'].includes(rawStatus)) normalizedStatus = 'error'
-          else if (['partial'].includes(rawStatus)) normalizedStatus = 'partial'
-
-          const startCount = parseInt(apiData.start_count) || 0
-          const remains = parseInt(apiData.remains) || 0
-
-          updateQueries.push(
-            c.env.DB.prepare(`
-              UPDATE orders 
-              SET status = ?1, start_count = ?2, remains = ?3 
-              WHERE id = ?4
-            `).bind(normalizedStatus, startCount, remains, order.local_id)
-          )
-          updatedCount++
-        } else {
-           debugLogs.push({ local_id: order.local_id, server_id: order.provider_order_id, error: "JSON tidak sesuai format SMM Panel", raw_response: result })
+          if (customResult[mapping.order_id_key]) {
+             providerOrderIdStr = customResult[mapping.order_id_key].toString()
+          } else {
+             providerErrorMessage = customResult[mapping.error_key] || "Pesanan ditolak oleh server pusat."
+          }
+        } catch (e) {
+          isNetworkError = true
         }
-
-      } catch (err: any) {
-         debugLogs.push({ local_id: order.local_id, error: err.message })
       }
     }
 
-    if (updateQueries.length > 0) {
-      await c.env.DB.batch(updateQueries)
+    // ==========================================
+    // KOMPENSASI SAGA (FINALISASI HASIL)
+    // ==========================================
+    if (isNetworkError) {
+      await c.env.DB.prepare(`UPDATE orders SET status = 'manual_reconciliation' WHERE id = ?1`).bind(localOrderId).run()
+      return c.json({ success: true, orderId: localOrderId, message: 'Pesanan diterima (API Gangguan, masuk antrean manual).' })
     }
 
-    return c.json({ 
-      success: true, 
-      message: `Selesai. ${updatedCount} dari ${pendingOrders.length} pesanan berhasil diupdate.`,
-      debug_logs: debugLogs
-    })
+    if (providerErrorMessage) {
+      // ROLLBACK: Refund instan jika Provider Pusat menolak, dan batalkan pesanan
+      await c.env.DB.batch([
+        c.env.DB.prepare(`UPDATE users SET balance = balance + ?1 WHERE id = ?2`).bind(charge, userId),
+        c.env.DB.prepare(`UPDATE orders SET status = 'canceled' WHERE id = ?1`).bind(localOrderId)
+      ])
+      return c.json({ error: `Gagal diproses pusat: ${providerErrorMessage}. Saldo dikembalikan.` }, 400)
+    }
 
-  } catch (error: any) {
-    return c.json({ error: 'Fatal Error di sistem cron.', details: error.message }, 500)
+    // Berhasil diteruskan ke pusat
+    await c.env.DB.prepare(`
+      UPDATE orders SET status = 'pending', provider_order_id = ?1 WHERE id = ?2
+    `).bind(providerOrderIdStr, localOrderId).run()
+
+    return c.json({ success: true, orderId: localOrderId, message: 'Pesanan berhasil dikirim ke server pusat.' })
+
+  } catch (error) {
+    return c.json({ error: 'Terjadi kesalahan sistem internal.' }, 500)
   }
 })
