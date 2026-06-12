@@ -4,6 +4,9 @@ import type { Bindings } from '../index'
 
 export const cronRouter = new Hono<{ Bindings: Bindings }>()
 
+// =========================================================
+// CRON JOB: SINKRONISASI STATUS PESANAN (AUTO-DETECT SMM API)
+// =========================================================
 cronRouter.get('/sync-orders', async (c) => {
   const url = new URL(c.req.url)
   const cronKey = url.searchParams.get('key')?.trim()
@@ -21,7 +24,7 @@ cronRouter.get('/sync-orders', async (c) => {
       FROM orders o
       JOIN services s ON o.service_id = s.id
       JOIN custom_providers cp ON s.provider_slug = cp.slug
-      WHERE o.status IN ('pending', 'processing', 'waiting', 'sedang berjalan')
+      WHERE o.status IN ('pending', 'processing', 'waiting', 'sedang berjalan', 'sedang diproses')
         AND o.provider_order_id IS NOT NULL
       LIMIT 30
     `).all()
@@ -29,12 +32,12 @@ cronRouter.get('/sync-orders', async (c) => {
     const pendingOrders = pendingOrdersData.results || []
 
     if (pendingOrders.length === 0) {
-      return c.json({ success: true, message: 'Tidak ada pesanan aktif.' })
+      return c.json({ success: true, message: 'Tidak ada pesanan aktif yang perlu disinkronisasi.' })
     }
 
     const updateQueries = []
     let updatedCount = 0
-    const debugLogs = [] // KITA TAMBAHKAN PENAMPUNG DEBUG DI SINI
+    const debugLogs = []
 
     const apiId = c.env.API_ID || c.env.MEDANPEDIA_API_ID || ''
     const apiKey = c.env.API_KEY || c.env.MEDANPEDIA_API_KEY || ''
@@ -47,72 +50,98 @@ cronRouter.get('/sync-orders', async (c) => {
         .replace(/{{provider_order_id}}/g, String(providerOrderId))
     }
 
-    const getNestedValue = (obj: any, path: string) => {
-      if (!path || !obj) return undefined
-      return path.split('.').reduce((acc, part) => acc && acc[part] !== undefined ? acc[part] : undefined, obj)
+    const ordersByProvider: Record<string, any> = {}
+    for (const order of pendingOrders) {
+      if (!ordersByProvider[order.provider_slug]) {
+        ordersByProvider[order.provider_slug] = {
+          base_url: order.base_url,
+          request_method: order.request_method,
+          content_type: order.content_type,
+          headers_template: order.headers_template,
+          check_body_template: order.check_body_template,
+          orders: []
+        }
+      }
+      ordersByProvider[order.provider_slug].orders.push(order)
     }
 
-    for (const order of pendingOrders) {
+    for (const providerSlug in ordersByProvider) {
+      const provider = ordersByProvider[providerSlug]
+      const providerOrderIds = provider.orders.map((o: any) => o.provider_order_id).join(',')
+
       try {
-        const rawHeaders = parseTemplate(order.headers_template || '{}', order.provider_order_id)
+        const rawHeaders = parseTemplate(provider.headers_template || '{}', providerOrderIds)
         const headers = JSON.parse(rawHeaders)
-        if (order.content_type) headers['Content-Type'] = order.content_type
+        if (provider.content_type) headers['Content-Type'] = provider.content_type
         headers['Accept'] = 'application/json'
 
-        const bodyPayload = parseTemplate(order.check_body_template || '', order.provider_order_id)
+        // PENTING: Pastikan template body di database custom_providers Anda memakai action=status
+        const bodyPayload = parseTemplate(provider.check_body_template || '', providerOrderIds)
 
-        const fetchOptions: any = { method: order.request_method || 'POST', headers: headers }
+        const fetchOptions: any = { method: provider.request_method || 'POST', headers: headers }
         if (fetchOptions.method !== 'GET' && fetchOptions.method !== 'HEAD') {
           fetchOptions.body = bodyPayload
         }
 
-        const response = await fetch(order.base_url, fetchOptions)
+        const response = await fetch(provider.base_url, fetchOptions)
         const result = await response.json()
 
-        const rawMapping = parseTemplate(order.response_mapping || '{}', order.provider_order_id)
-        const mapping = JSON.parse(rawMapping)
-
-        const statusKey = mapping.status_key || 'status'
-        const startCountKey = mapping.start_count_key || 'start_count'
-        const remainsKey = mapping.remains_key || 'remains'
-
-        const rawStatus = getNestedValue(result, statusKey)
-
-        if (rawStatus !== undefined) {
-          const statusStr = String(rawStatus).toLowerCase()
-          let normalizedStatus = 'pending'
+        for (const order of provider.orders) {
+          // -----------------------------------------------------
+          // FITUR AUTO-DETECT SMM PANEL API FORMAT
+          // -----------------------------------------------------
+          let apiData = null;
           
-          const successVal = mapping.success_value ? String(mapping.success_value).toLowerCase() : 'success'
-          const processingVal = mapping.processing_value ? String(mapping.processing_value).toLowerCase() : 'processing'
-          
-          if (statusStr === successVal || ['success', 'completed'].includes(statusStr)) normalizedStatus = 'success'
-          else if (statusStr === processingVal || ['processing', 'in progress', 'sedang berjalan'].includes(statusStr)) normalizedStatus = 'processing'
-          else if (['error', 'canceled', 'cancelled', 'fail'].includes(statusStr)) normalizedStatus = 'error'
-          else if (['partial'].includes(statusStr)) normalizedStatus = 'partial'
+          // Format Medanpedia/Irvankede: { "data": { "12345": { "status": "..." } } }
+          if (result?.data && result.data[order.provider_order_id]) {
+            apiData = result.data[order.provider_order_id]
+          } 
+          // Format PerfectPanel: { "12345": { "status": "..." } }
+          else if (result && result[order.provider_order_id]) {
+            apiData = result[order.provider_order_id]
+          }
+          // Format 1 ID (bukan batch): { "status": "...", "start_count": 0 }
+          else if (result && result.status !== undefined && typeof result.status === 'string') {
+            apiData = result
+          }
 
-          const startCount = parseInt(getNestedValue(result, startCountKey)) || 0
-          const remains = parseInt(getNestedValue(result, remainsKey)) || 0
+          if (apiData) {
+            const rawStatus = String(apiData.status).toLowerCase().trim()
+            let normalizedStatus = 'pending'
+            
+            // PENCOCOKAN STATUS BAHASA INDONESIA & INGGRIS (Sesuai Screenshot Anda)
+            if (['success', 'completed', 'selesai'].includes(rawStatus)) {
+              normalizedStatus = 'success'
+            } else if (['processing', 'in progress', 'sedang berjalan', 'sedang diproses'].includes(rawStatus)) {
+              normalizedStatus = 'processing'
+            } else if (['error', 'canceled', 'cancelled', 'fail', 'permintaan batal', 'batal'].includes(rawStatus)) {
+              normalizedStatus = 'error'
+            } else if (['partial'].includes(rawStatus)) {
+              normalizedStatus = 'partial'
+            }
 
-          updateQueries.push(
-            c.env.DB.prepare(`
-              UPDATE orders 
-              SET status = ?1, start_count = ?2, remains = ?3 
-              WHERE id = ?4
-            `).bind(normalizedStatus, startCount, remains, order.local_id)
-          )
-          updatedCount++
-        } else {
-          // JIKA GAGAL MENEMUKAN STATUS, MASUKKAN KE LOG DEBUG
-          debugLogs.push({
-            pesanan_id: order.local_id,
-            provider_order_id: order.provider_order_id,
-            mapping_dicari: statusKey,
-            balasan_asli_api: result
-          })
+            const startCount = parseInt(apiData.start_count) || 0
+            const remains = parseInt(apiData.remains) || 0
+
+            updateQueries.push(
+              c.env.DB.prepare(`
+                UPDATE orders 
+                SET status = ?1, start_count = ?2, remains = ?3 
+                WHERE id = ?4
+              `).bind(normalizedStatus, startCount, remains, order.local_id)
+            )
+            updatedCount++
+          } else {
+            debugLogs.push({
+              pesanan_id: order.local_id,
+              pesan: "Gagal menemukan ID ini di dalam JSON",
+              json_dari_api: result
+            })
+          }
         }
 
       } catch (err: any) {
-        debugLogs.push({ pesanan_id: order.local_id, error_koneksi: err.message })
+        debugLogs.push({ provider: providerSlug, error: err.message })
       }
     }
 
@@ -124,7 +153,7 @@ cronRouter.get('/sync-orders', async (c) => {
       success: true, 
       message: `Pengecekan selesai. ${updatedCount} pesanan berhasil disinkronisasi.`,
       processed_orders: pendingOrders.length,
-      debug_error_logs: debugLogs // KITA MUNCULKAN DI SINI
+      debug_logs: debugLogs
     })
 
   } catch (error: any) {
