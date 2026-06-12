@@ -3,6 +3,7 @@ import { Hono } from 'hono'
 import { createApp } from 'honox/server'
 import { apiRouter } from './api/index'
 import { fetchMedanpedia } from './api/medanpedia'
+import { cronRouter } from './api/cron'
 
 export type Bindings = {
   DB: D1Database
@@ -23,7 +24,7 @@ app.route('/api', apiRouter)
 // Rute Frontend (HonoX)
 const frontendApp = createApp()
 app.route('/', frontendApp)
-
+app.route('/api/cron', cronRouter)
 // Menangani permintaan 404 agar tidak error di serverless
 app.notFound((c) => {
   return c.text('Halaman tidak ditemukan atau API Endpoint tidak valid.', 404)
