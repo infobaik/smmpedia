@@ -2,7 +2,7 @@
 import { Hono } from 'hono'
 import { authRouter } from './auth'
 import { cloudinaryRouter } from './cloudinary'
-import { medanpediaRouter } from './medanpedia'
+import { buzzerpanelRouter } from './buzzerpanel'
 import { ordersRouter } from './orders'
 import { cronRouter } from './cron'
 import { webhookRouter } from './webhook'
@@ -14,7 +14,7 @@ export const apiRouter = new Hono()
 
 apiRouter.route('/auth', authRouter)
 apiRouter.route('/cloudinary', cloudinaryRouter)
-apiRouter.route('/medanpedia', medanpediaRouter)
+apiRouter.route('/buzzerpanel', buzzerpanelRouter)
 apiRouter.route('/orders', ordersRouter)
 apiRouter.route('/cron', cronRouter)
 apiRouter.route('/webhook', webhookRouter)
