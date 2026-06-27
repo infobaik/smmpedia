@@ -109,8 +109,8 @@ const routeHandler = async (c: any) => {
         {/* HEADER */}
         <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
           <h1 class="text-2xl font-bold">Katalog Produk & Layanan</h1>
-          <button id="syncMedanpediaBtn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 px-5 rounded-lg flex items-center transition shadow-sm">
-            <i data-lucide="refresh-cw" class="w-5 h-5 mr-2"></i> Sinkronisasi Medanpedia
+          <button id="syncBuzzerpanelBtn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 px-5 rounded-lg flex items-center transition shadow-sm">
+            <i data-lucide="refresh-cw" class="w-5 h-5 mr-2"></i> Sinkronisasi BuzzerPanel
           </button>
         </div>
 
@@ -316,9 +316,9 @@ const routeHandler = async (c: any) => {
           </div>
         </div>
 
-        {/* LOGIKA JAVASCRIPT TOMBOL SINKRONISASI MEDANPEDIA */}
+        {/* LOGIKA JAVASCRIPT TOMBOL SINKRONISASI BUZZERPANEL */}
         <script dangerouslySetInnerHTML={{ __html: `
-          document.getElementById('syncMedanpediaBtn')?.addEventListener('click', async (e) => {
+          document.getElementById('syncBuzzerpanelBtn')?.addEventListener('click', async (e) => {
             const btn = e.currentTarget;
             const alertBox = document.getElementById('syncAlertBox');
             
@@ -331,7 +331,7 @@ const routeHandler = async (c: any) => {
             alertBox.classList.remove('bg-green-100', 'text-green-700', 'bg-red-100', 'text-red-700');
 
             try {
-              const response = await fetch('/api/medanpedia/sync-services', {
+              const response = await fetch('/api/buzzerpanel/sync-services', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' }
               });
