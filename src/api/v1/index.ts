@@ -1,7 +1,7 @@
 // src/api/v1/index.ts
 import { Hono } from 'hono'
 import type { Bindings } from '../../index'
-import { fetchMedanpedia } from '../medanpedia'
+import { fetchBuzzerPanel } from '../buzzerpanel'
 
 export const apiV1Router = new Hono<{ Bindings: Bindings }>()
 
@@ -132,13 +132,17 @@ const apiHandler = async (c: any) => {
       let providerErrorMessage = null;
       let isNetworkError = false;
 
-      if (srv.provider_slug === 'medanpedia') {
+      if (srv.provider_slug === 'buzzerpanel') {
         try {
-          const providerResponse = await fetchMedanpedia(c.env.MEDANPEDIA_API_KEY, 'add', {
+          // AMBIL KREDENSIAL DARI DATABASE
+          const providerData = await c.env.DB.prepare('SELECT api_key, secret_key FROM providers WHERE slug = "buzzerpanel"').first()
+          
+          const providerResponse = await fetchBuzzerPanel(providerData?.api_key as string || '', providerData?.secret_key as string || '', 'order', {
             service: srv.product_provider_id, link: link, quantity: qtyNum
           })
-          if (providerResponse.error) providerErrorMessage = providerResponse.error
-          else if (providerResponse.order) providerOrderIdStr = providerResponse.order.toString()
+          
+          if (providerResponse.status === false || providerResponse.error) providerErrorMessage = providerResponse.data || providerResponse.error || "Gagal memproses pesanan."
+          else if (providerResponse.data && providerResponse.data.id) providerOrderIdStr = providerResponse.data.id.toString()
           else isNetworkError = true
         } catch (e) {
           isNetworkError = true
@@ -147,7 +151,14 @@ const apiHandler = async (c: any) => {
         const customProvider = await c.env.DB.prepare('SELECT * FROM providers WHERE slug = ?1 AND status = "active"').bind(srv.provider_slug).first()
         if (customProvider) {
           try {
-            const payload = buildPayload(customProvider.order_body_template as string, { link, quantity: qtyNum, product_provider_id: srv.product_provider_id })
+            // Meneruskan api_key dan secret_key ke Custom Provider dari Database
+            const payload = buildPayload(customProvider.order_body_template as string, { 
+              link, 
+              quantity: qtyNum, 
+              product_provider_id: srv.product_provider_id,
+              api_key: customProvider.api_key || '',
+              secret_key: customProvider.secret_key || ''
+            })
             const headers = JSON.parse(customProvider.headers_template as string)
             let bodyData: BodyInit;
 
