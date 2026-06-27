@@ -2,7 +2,7 @@
 import { Hono } from 'hono'
 import { createApp } from 'honox/server'
 import { apiRouter } from './api/index'
-import { fetchMedanpedia } from './api/medanpedia'
+import { fetchBuzzerPanel } from './api/buzzerpanel'
 import { cronRouter } from './api/cron'
 
 export type Bindings = {
@@ -10,7 +10,6 @@ export type Bindings = {
   CONFIG_KV: KVNamespace
   JWT_SECRET: string
   CRON_SECRET: string
-  MEDANPEDIA_API_KEY: string
   CLOUDINARY_CLOUD_NAME: string
   CLOUDINARY_API_KEY: string
   CLOUDINARY_SECRET: string
@@ -18,14 +17,12 @@ export type Bindings = {
 
 const app = new Hono<{ Bindings: Bindings }>()
 
-// Rute API Terpusat (Backend)
 app.route('/api', apiRouter)
 
-// Rute Frontend (HonoX)
 const frontendApp = createApp()
 app.route('/', frontendApp)
 app.route('/api/cron', cronRouter)
-// Menangani permintaan 404 agar tidak error di serverless
+
 app.notFound((c) => {
   return c.text('Halaman tidak ditemukan atau API Endpoint tidak valid.', 404)
 })
@@ -33,17 +30,15 @@ app.notFound((c) => {
 export default {
   fetch: app.fetch,
   
-  // Handler untuk Cloudflare Cron Triggers
   async scheduled(event: any, env: Bindings, ctx: any) {
     const activeOrders = await env.DB.prepare(`
       SELECT id, provider_order_id FROM orders 
-      WHERE status IN ('pending', 'processing', 'in progress') 
+      WHERE status IN ('pending', 'processing', 'in progress', 'sedang berjalan', 'sedang diproses') 
       LIMIT 100
     `).all()
 
     if (!activeOrders.results || activeOrders.results.length === 0) return;
 
-    // Filter id provider yang valid agar tidak mengirim null ke pusat
     const providerIds = activeOrders.results
       .map(o => o.provider_order_id)
       .filter(id => id !== null && id !== undefined)
@@ -52,19 +47,33 @@ export default {
     if (!providerIds) return;
 
     try {
-      const statusResponse = await fetchMedanpedia(env.MEDANPEDIA_API_KEY, 'status', {
-        orders: providerIds
+      const providerData = await env.DB.prepare('SELECT api_key, secret_key FROM providers WHERE slug = "buzzerpanel"').first()
+      const apiKey = providerData?.api_key || ''
+      const secretKey = providerData?.secret_key || ''
+
+      const statusResponse = await fetchBuzzerPanel(apiKey as string, secretKey as string, 'status', {
+        id: providerIds
       })
       
       const updateStatements = []
       const updateQuery = env.DB.prepare('UPDATE orders SET status = ?1 WHERE id = ?2')
+      
+      const dataObj = statusResponse.data || statusResponse
 
       for (const order of activeOrders.results) {
         const providerIdStr = String(order.provider_order_id)
-        const orderStatusData = statusResponse[providerIdStr]
+        const orderStatusData = dataObj[providerIdStr]
 
         if (orderStatusData && orderStatusData.status) {
-          updateStatements.push(updateQuery.bind(orderStatusData.status.toLowerCase(), order.id))
+          let normalizedStatus = 'pending'
+          const rawStatus = String(orderStatusData.status).toLowerCase().trim()
+          
+          if (['success', 'completed', 'selesai'].includes(rawStatus)) normalizedStatus = 'success'
+          else if (['processing', 'in progress', 'sedang berjalan', 'sedang diproses'].includes(rawStatus)) normalizedStatus = 'processing'
+          else if (['error', 'canceled', 'cancelled', 'fail', 'permintaan batal', 'batal'].includes(rawStatus)) normalizedStatus = 'error'
+          else if (['partial'].includes(rawStatus)) normalizedStatus = 'partial'
+
+          updateStatements.push(updateQuery.bind(normalizedStatus, order.id))
         }
       }
 
